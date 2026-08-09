@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Movement Analysis Suite</title>
+<style>
+  :root{
+    --bg:#070d1a; --panel:rgba(19,29,50,.55); --panel2:rgba(24,36,60,.7); --stroke:rgba(126,150,190,.16);
+    --stroke2:rgba(126,150,190,.28); --ink:#eef3fb; --sec:#aeb9cd; --muted:#7d8aa2;
+    --accent:#4a91ff; --accent2:#67e8f9; --gt:#4a91ff; --pred:#ff8a3d; --good:#2fd6a0; --warn:#ffbf5b;
+    --r:16px; --sp:16px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;color:var(--ink);background:var(--bg);
+    -webkit-font-smoothing:antialiased;overflow-x:hidden}
+  /* animated backdrop */
+  .bgfx{position:fixed;inset:0;z-index:-2;background:
+    radial-gradient(1000px 700px at 12% -8%,rgba(74,145,255,.20),transparent 45%),
+    radial-gradient(900px 600px at 100% 0%,rgba(103,232,249,.10),transparent 45%),
+    linear-gradient(180deg,#060b16,#070d1a 40%,#050912)}
+  .bgfx::after{content:"";position:absolute;inset:0;opacity:.4;
+    background-image:linear-gradient(rgba(126,150,190,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(126,150,190,.05) 1px,transparent 1px);
+    background-size:44px 44px;mask-image:radial-gradient(ellipse at 50% 0%,#000 30%,transparent 75%)}
+  .wrap{max-width:1440px;margin:0 auto;padding:18px 26px 70px}
+  /* top bar */
+  .top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+    background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    border:1px solid var(--stroke);border-radius:var(--r);padding:14px 18px;position:sticky;top:12px;z-index:20;
+    box-shadow:0 12px 40px rgba(2,6,20,.4)}
+  .brand .k{font-size:.68rem;letter-spacing:.16em;text-transform:uppercase;color:var(--accent2);font-weight:700}
+  .brand h1{font-size:1.35rem;font-weight:800;margin:1px 0 0;letter-spacing:-.01em}
+  .tools{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  .btn{background:linear-gradient(180deg,rgba(40,56,88,.9),rgba(28,42,68,.9));border:1px solid var(--stroke2);
+    color:var(--ink);border-radius:11px;padding:9px 15px;font-weight:600;font-size:.85rem;cursor:pointer;transition:.16s;white-space:nowrap}
+  .btn:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:0 8px 24px rgba(74,145,255,.18)}
+  .btn.primary{background:linear-gradient(180deg,var(--accent),#2f6fe0);border-color:transparent;color:#fff;box-shadow:0 8px 22px rgba(74,145,255,.32)}
+  .btn.mini{padding:7px 11px;font-size:.8rem}
+  input[type=file]{display:none}
+  select{background:rgba(20,32,54,.9);border:1px solid var(--stroke2);color:var(--ink);border-radius:10px;padding:8px 11px;font-size:.85rem}
+  .status{color:var(--sec);font-size:.8rem;background:rgba(47,214,160,.09);border:1px solid rgba(47,214,160,.32);
+    border-radius:10px;padding:7px 12px;width:250px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .status.warn{background:rgba(255,191,91,.09);border-color:rgba(255,191,91,.34);color:#ffd79a}
+  .status.none{background:rgba(126,150,190,.08);border-color:var(--stroke);color:var(--muted)}
+  /* tabs */
+  nav.tabs{display:inline-flex;gap:4px;margin:18px 0 16px;background:var(--panel);border:1px solid var(--stroke);
+    border-radius:13px;padding:5px;backdrop-filter:blur(10px)}
+  .tab{border-radius:9px;padding:9px 20px;color:var(--sec);font-weight:600;font-size:.9rem;cursor:pointer;transition:.16s;border:1px solid transparent}
+  .tab:hover{color:var(--ink)}
+  .tab.active{background:linear-gradient(180deg,rgba(74,145,255,.24),rgba(74,145,255,.12));border-color:rgba(74,145,255,.5);color:#fff;box-shadow:0 4px 16px rgba(74,145,255,.2)}
+  .panel-sec{display:none;animation:fade .25s ease}
+  .panel-sec.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .card{background:var(--panel);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    border:1px solid var(--stroke);border-radius:var(--r);padding:16px 18px;box-shadow:0 14px 40px rgba(2,6,20,.32)}
+  .card.tight{padding:12px 14px}
+  .grid2{display:grid;grid-template-columns:1.05fr 1fr;gap:var(--sp)}
+  @media(max-width:1050px){.grid2{grid-template-columns:1fr}}
+  .title{font-weight:700;font-size:1rem;margin:0 0 4px;display:flex;align-items:center;gap:9px}
+  .title .tag{font-size:.66rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    border:1px solid var(--stroke2);border-radius:6px;padding:2px 7px}
+  .muted{color:var(--muted);font-size:.8rem}
+  canvas{display:block;width:100%;border-radius:12px;background:rgba(9,15,28,.5)}
+  #skel{height:520px;cursor:grab} #skel:active{cursor:grabbing}
+  /* video and 3D pose share one height so both cards match */
+  #predGrid{grid-template-columns:1fr 1fr}
+  #predGrid > .card{display:flex;flex-direction:column}
+  #errTime{height:260px} #heat{height:452px} #hist{height:250px} #cmpRadar{height:430px}
+  .siggrid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:900px){.siggrid{grid-template-columns:1fr}}
+  .sigcell .title{font-size:.92rem;margin-bottom:6px}
+  .sigcell canvas{height:212px}
+  #sigOverlay{height:240px}
+  .swatch{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .cbar{display:inline-flex;align-items:center;gap:9px;font-size:.74rem;color:var(--sec);margin-top:10px}
+  .cbar .grad{width:170px;height:10px;border-radius:5px;background:linear-gradient(90deg,rgb(47,110,90),rgb(120,150,60),rgb(240,150,60),rgb(255,120,90))}
+  video{width:100%;height:520px;border-radius:12px;background:#020617;display:block;object-fit:contain}
+  /* bento KPIs */
+  .bento{display:grid;grid-template-columns:repeat(6,1fr);gap:14px}
+  .kpi{grid-column:span 2;background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--stroke);
+    border-radius:14px;padding:16px 18px;position:relative;overflow:hidden;transition:.16s}
+  .kpi:hover{border-color:var(--stroke2);transform:translateY(-2px)}
+  .kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent);opacity:.8}
+  .kpi.hero{grid-column:span 3}
+  .kpi .l{color:var(--muted);font-size:.66rem;letter-spacing:.09em;text-transform:uppercase;font-weight:700}
+  .kpi .v{font-size:1.7rem;font-weight:800;margin-top:4px;letter-spacing:-.02em}
+  .kpi.hero .v{font-size:2.4rem}
+  .kpi .s{color:var(--sec);font-size:.76rem;margin-top:1px}
+  .kpi .spark{position:absolute;right:12px;bottom:10px;opacity:.5}
+  @media(max-width:1050px){.bento{grid-template-columns:repeat(2,1fr)}.kpi,.kpi.hero{grid-column:span 1}}
+  /* controls */
+  .controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .seg{display:inline-flex;background:rgba(20,32,54,.8);border:1px solid var(--stroke2);border-radius:10px;padding:3px}
+  .seg button{border:0;background:transparent;color:var(--sec);padding:6px 13px;border-radius:8px;cursor:pointer;font-size:.82rem;font-weight:600}
+  .seg button.on{background:rgba(74,145,255,.24);color:#fff}
+  input[type=range]{flex:1;accent-color:var(--accent);height:6px}
+  .play{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+  label.chk{display:inline-flex;gap:7px;align-items:center;color:var(--sec);font-size:.85rem;cursor:pointer}
+  .legend{display:flex;gap:18px;font-size:.78rem;color:var(--sec);margin-top:10px;flex-wrap:wrap;align-items:center}
+  .lg{display:inline-flex;align-items:center;gap:7px} .lg i{width:22px;height:0;border-top:3px solid;display:inline-block}
+  /* bars */
+  .bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:.79rem}
+  .bar .nm{width:130px;color:var(--sec);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar .tr{flex:1;background:rgba(126,150,190,.12);border-radius:6px;height:16px;overflow:hidden}
+  .bar .fl{height:100%;border-radius:6px;transition:width .4s cubic-bezier(.2,.8,.2,1)}
+  .bar .vv{width:70px;color:var(--ink);font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;font-size:.84rem}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--stroke);text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:rgba(74,145,255,.1);color:#cfe0fb;font-weight:600}
+  tr.best td{background:rgba(47,214,160,.1)}
+  .empty{color:var(--muted);text-align:center;padding:44px 20px}
+  .empty .big{font-size:1.05rem;color:var(--sec);margin-bottom:6px}
+  .tip{background:rgba(74,145,255,.08);border:1px solid rgba(74,145,255,.28);border-radius:12px;padding:12px 15px;color:var(--sec);font-size:.85rem}
+  .tip b{color:var(--ink)}
+  .tt{position:fixed;pointer-events:none;background:rgba(10,16,30,.95);border:1px solid var(--stroke2);border-radius:8px;
+    padding:6px 9px;font-size:.76rem;color:var(--ink);z-index:50;display:none;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  code{background:rgba(126,150,190,.14);padding:1px 6px;border-radius:5px;font-size:.82em;color:#bcd0ee}
+</style>
+</head>
+<body>
+<div class="bgfx"></div>
+<div class="tt" id="tooltip"></div>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><div class="k">Technical Project · build 8</div><h1>Movement Analysis Suite</h1></div>
+    <div class="tools">
+      <button class="btn primary" id="pickFolder">📁 Load folder</button>
+      <button class="btn mini" id="pickFiles">Files…</button>
+      <input id="rootInput" placeholder="…or paste project root path" title="Manual fallback — you can also just click Load folder" style="display:none;min-width:220px;background:rgba(20,32,54,.9);border:1px solid var(--stroke2);color:var(--ink);border-radius:10px;padding:9px 11px;font-size:.84rem">
+      <button class="btn mini" id="scanBtn" style="display:none">🔎 Scan</button>
+      <button class="btn mini" id="loadDemo">Demo</button>
+      <select id="subjectSel" style="display:none"></select>
+      <button class="btn mini" id="reloadBtn" style="display:none" title="Re-read this recording from disk">&#8635; Reload</button>
+      <span class="status none" id="status">No data loaded</span>
+      <input type="file" id="folderInput" webkitdirectory directory multiple>
+      <input type="file" id="filesInput" multiple accept=".csv,.mp4,.mov,.json">
+    </div>
+  </div>
+
+  <nav class="tabs">
+    <div class="tab active" data-tab="signals">Signals</div>
+    <div class="tab" data-tab="pred">Prediction &amp; Video</div>
+    <div class="tab" data-tab="eval">Evaluation</div>
+  </nav>
+
+  <!-- SIGNALS -->
+  <section class="panel-sec active" id="panel-signals">
+    <div class="card tight controls" style="margin-bottom:14px">
+      <div class="seg" id="sigSourceSeg"><button data-v="acc" class="on">Acceleration</button><button data-v="gyr">Gyroscope</button></div>
+      <label class="chk"><input type="checkbox" id="normSig"> Normalize</label>
+      <span class="muted" id="normHint" title="Normalize = each axis zero-centred and scaled to comparable amplitude, so sensors/axes line up on one scale (shape is preserved — it is not noise).">one panel per wearable · line style = axis (—— X · ···· Y · – – Z) · hover for values</span>
+    </div>
+    <div class="card" style="margin-bottom:16px"><div class="title">All wearables — one synced timeline <span class="tag">signal magnitude</span></div>
+      <canvas id="sigOverlay" height="240"></canvas><div class="legend" id="sigOverlayLegend"></div></div>
+    <div class="siggrid" id="sigGrid"></div>
+  </section>
+
+  <!-- PREDICTION & VIDEO -->
+  <section class="panel-sec" id="panel-pred">
+    <div class="card tight play">
+      <button class="btn primary" id="playBtn">▶ Play</button>
+      <input type="range" id="timeSlider" min="0" max="1" step="0.001" value="0">
+      <span id="timeLabel" class="muted" style="min-width:130px;text-align:right">00:00.0 / 00:00.0</span>
+    </div>
+    <div class="grid2" id="predGrid">
+      <div class="card">
+        <div class="title">Reference video</div>
+        <video id="video" playsinline muted controls></video>
+        <div id="noVideo" class="empty" style="display:none"><div class="big">No video loaded</div>attach a subject folder that contains the clip</div>
+        <div id="vidConv" style="display:none;margin-top:10px"><div style="height:10px;background:rgba(126,150,190,.14);border-radius:6px;overflow:hidden"><div id="vidConvFill" style="height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .2s"></div></div><div id="vidConvTxt" class="muted" style="margin-top:5px"></div></div>
+        <div id="videoHint" class="tip" style="display:none;margin-top:10px">This clip's codec (H.265/HEVC) cannot be decoded by the browser. Convert it to H.264 below.</div>
+        <div style="margin-top:10px"><button class="btn mini" id="transcodeBtn" style="display:none">Convert video to H.264</button></div>
+      </div>
+      <div class="card">
+        <div class="title">3D pose <span class="tag" id="poseTag">GT vs prediction</span></div>
+        <canvas id="skel" height="560"></canvas>
+        <div class="controls" style="margin-top:10px">
+          <div class="seg" id="viewSeg"><button data-v="overlay" class="on">Overlay</button><button data-v="pred">Prediction</button><button data-v="gt">Ground truth</button></div>
+          <label class="chk"><input type="checkbox" id="showErrVec" checked> Error links</label>
+          <select id="predSelect" style="display:none"></select>
+        </div>
+        <div class="legend" id="skelLegend"></div>
+      </div>
+    </div>
+    <div class="bento" id="predKpis" style="margin-top:16px"></div>
+  </section>
+
+  <!-- EVALUATION -->
+  <section class="panel-sec" id="panel-eval">
+    <div id="runPanel" style="display:none"></div>
+    <div class="card tight controls" style="margin-bottom:14px">
+      <select id="evalSelect"></select>
+      <label class="chk"><input type="checkbox" id="compareAll"> Compare all models</label>
+      <span class="muted" id="evalNote"></span>
+    </div>
+    <div id="evalEmpty" style="display:none"></div>
+    <div id="evalSingle">
+      <div class="bento" id="evalKpis"></div>
+      <div class="grid2" style="margin-top:16px">
+        <div class="card"><div class="title">MPJPE over time <span class="tag">mm</span></div><canvas id="errTime" height="260"></canvas></div>
+        <div class="card"><div class="title">Per-joint error <span class="tag">mm</span></div><div id="perJoint" style="max-height:452px;overflow:auto;padding-right:6px"></div></div>
+      </div>
+      <div class="card" style="margin-top:16px"><div class="title">Per-joint error over time <span class="tag">joints × time · heatmap</span></div>
+        <canvas id="heat" height="452"></canvas>
+        <div class="cbar"><span>low error</span><span class="grad"></span><span>high · ≥90 mm</span><span class="muted" style="margin-left:10px">worst joints on top · dashed line = current time</span></div></div>
+      <div class="grid2" style="margin-top:16px">
+        <div class="card"><div class="title">Error distribution <span class="tag">all joints × frames</span></div><canvas id="hist" height="250"></canvas></div>
+        <div class="card"><div class="title">Where the error lives <span class="tag">context</span></div>
+          <div class="muted" style="line-height:1.7">
+            <b style="color:var(--ink)">MPJPE</b> — mean joint distance after hip-centring.<br>
+            <b style="color:var(--ink)">PA-MPJPE</b> — after Procrustes alignment (removes global rotation/scale); isolates <i>pose</i> error.<br>
+            <b style="color:var(--ink)">PCK@50/100</b> — share of joints within 50 / 100 mm.<br>
+            <b style="color:var(--ink)">Jitter</b> — 3rd-derivative smoothness (m/s³); compare against the GT value.<br>
+            <b style="color:var(--ink)">Bone / Angle</b> — limb-length &amp; joint-angle deviation → skeletal plausibility.
+          </div></div>
+      </div>
+    </div>
+    <div id="evalCompare" style="display:none">
+      <div class="grid2">
+        <div class="card"><div class="title">Model comparison <span class="tag">ranked</span></div><div id="cmpTable"></div></div>
+        <div class="card"><div class="title">Overall profile <span class="tag">radar · outer = better</span></div><canvas id="cmpRadar" height="430"></canvas></div>
+      </div>
+      <div class="grid2" style="margin-top:16px">
+        <div class="card"><div class="title">MPJPE <span class="tag">lower better</span></div><div id="cmpMpjpe"></div></div>
+        <div class="card"><div class="title">Jitter — smoothness <span class="tag">lower better</span></div><div id="cmpJit"></div></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+"use strict";
+console.log("[dashboard] build 8 — kinematics variant support + per-model skeleton topology");
+const CONN=[[0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10],[11,12],[11,13],[13,15],[15,17],[15,19],[15,21],[17,19],[12,14],[14,16],[16,18],[16,20],[16,22],[11,23],[12,24],[23,24],[23,25],[24,26],[25,27],[26,28],[27,29],[28,30],[29,31],[30,32],[27,31],[28,32]];
+const JOINTS=["nose","left eye (in)","left eye","left eye (out)","right eye (in)","right eye","right eye (out)","left ear","right ear","mouth (L)","mouth (R)","left shoulder","right shoulder","left elbow","right elbow","left wrist","right wrist","left pinky","right pinky","left index","right index","left thumb","right thumb","left hip","right hip","left knee","right knee","left ankle","right ankle","left heel","right heel","left foot idx","right foot idx"];
+const ANGLES=[[11,13,15],[12,14,16],[23,25,27],[24,26,28]];
+// --- culled 13-node topology (virtual pelvis + 12 joints), used by the newer models ---
+const MP13=[23,25,27,24,26,28,11,13,15,12,14,16];
+const CONN13=[[0,1],[1,2],[2,3],[0,4],[4,5],[5,6],[0,7],[7,8],[8,9],[0,10],[10,11],[11,12]];
+const JOINTS13=["pelvis","left hip","left knee","left ankle","right hip","right knee","right ankle",
+                "left shoulder","left elbow","left wrist","right shoulder","right elbow","right wrist"];
+const ANGLES13=[[7,8,9],[10,11,12],[1,2,3],[4,5,6]];   // elbows + knees
+function topoOf(nj){return nj===13?{conn:CONN13,names:JOINTS13,ang:ANGLES13}:{conn:CONN,names:JOINTS,ang:ANGLES};}
+// a model may ship its own skeleton definition (predictions__<name>.topology.json)
+function topoFor(M){return (M&&M.topo)||topoOf((M&&M.nj)||33);}
+function topoFromParents(par,names){
+  if(!Array.isArray(par)||!par.length)return null;
+  const conn=[];for(let i=1;i<par.length;i++)conn.push([par[i],i]);
+  // knees/elbows = joints that have both a parent and a child -> usable angle triplets
+  const child={};for(let i=1;i<par.length;i++)(child[par[i]]=child[par[i]]||[]).push(i);
+  const ang=[];for(let i=1;i<par.length;i++)if(child[i]&&child[i].length===1)ang.push([par[i],i,child[i][0]]);
+  return{conn,names:names&&names.length===par.length?names:topoOf(par.length).names,ang:ang.length?ang:topoOf(par.length).ang};}
+// ground truth culled to the 13-node topology (cached per dataset)
+function cull13(gt){const T=gt.T,J=new Float32Array(T*13*3);
+  for(let f=0;f<T;f++){
+    for(let a=0;a<3;a++)J[(f*13)*3+a]=(gt.J[(f*33+23)*3+a]+gt.J[(f*33+24)*3+a])/2;   // virtual pelvis
+    for(let k=0;k<12;k++){const s=MP13[k];for(let a=0;a<3;a++)J[(f*13+k+1)*3+a]=gt.J[(f*33+s)*3+a];}}
+  return{time:gt.time,J,T,nj:13,okCols:39};}
+function gtFor(M){const nj=(M&&M.nj)||(S.gt?S.gt.nj:33);
+  if(!S.gt)return null;
+  if(nj===S.gt.nj)return S.gt;
+  if(nj===13&&S.gt.nj===33){if(!S._gt13)S._gt13=cull13(S.gt);return S._gt13;}
+  return S.gt;}
+const SENSOR_TOKENS={"Left Ankle":["left_ankle","leftankle"],"Right Ankle":["right_ankle","rightankle"],"Left Wrist":["left_wrist","leftwrist"],"Right Wrist":["right_wrist","rightwrist"]};
+const SENSOR_COLOR={"Left Ankle":"#4a91ff","Right Ankle":"#ff8a3d","Left Wrist":"#2fd6a0","Right Wrist":"#c98bff"};
+const MODEL_PALETTE=["#4a91ff","#ff8a3d","#2fd6a0","#ffbf5b","#c98bff","#67e8f9"];
+const S={gt:null,sensors:{},models:{},videoURL:null,t:0,tmin:0,tmax:1,playing:false,cam:{az:0.15,el:0.03},curModel:null,view:"overlay",subjects:[],ckpts:0};
+const SERVER=location.protocol.startsWith("http");   // served by serve.py -> in-app inference
+let SCAN={subjects:[],checkpoints:[],sources:[],torch:false}, CURDIR=null;
+
+// ---------- CSV ----------
+function splitLines(t){const r=[];let s=0,n=t.length,e=t.indexOf("\n");const header=t.slice(0,e<0?n:e).trim().split(",").map(h=>h.trim().toLowerCase());s=(e<0?n:e+1);while(s<n){let nl=t.indexOf("\n",s);if(nl<0)nl=n;const l=t.slice(s,nl);s=nl+1;if(l)r.push(l);}return{header,rows:r};}
+function idxmap(h){const m={};h.forEach((x,i)=>m[x]=i);return m;}
+const _JNAME=JOINTS.map(s=>s.replace(/[^a-z0-9]+/gi,"_").replace(/_$/,"").toLowerCase());
+function buildGT(text){const {header,rows}=splitLines(text);const idx=idxmap(header);const T=rows.length;
+  // how many joints does this file carry?  (j0_x … jN_z  ->  N+1)
+  let maxJ=-1;header.forEach(h=>{const m=/^j(\d+)_[xyz]$/.exec(h);if(m)maxJ=Math.max(maxJ,+m[1]);});
+  const nj=maxJ>=0?maxJ+1:33, W=nj*3;
+  const time=new Float64Array(T),J=new Float32Array(T*W);
+  const ci=new Int32Array(W).fill(-1);
+  for(let j=0;j<nj;j++)for(let a=0;a<3;a++){const ax="xyz"[a];
+    const cand=[`j${j}_${ax}`];
+    if(nj===33)cand.push(`${_JNAME[j]}_${ax}`,`${ax}${j}`,`${j}_${ax}`,`joint${j}_${ax}`,`p${j}_${ax}`,`kp${j}_${ax}`);
+    for(const c of cand){if(idx[c]!=null){ci[j*3+a]=idx[c];break;}}}
+  const ti=idx["time"]!=null?idx["time"]:(idx["frame"]!=null?idx["frame"]:-1);
+  for(let r=0;r<T;r++){const p=rows[r].split(",");time[r]=ti>=0?parseFloat(p[ti]):r;
+    for(let k=0;k<W;k++){const c=ci[k];J[r*W+k]=c>=0?parseFloat(p[c]):NaN;}}
+  let ok=0;for(let k=0;k<W;k++)if(ci[k]>=0)ok++;
+  return{time,J,T,nj,okCols:Math.round(ok/W*99)};}   // okCols normalised to the old 0-99 scale
+function buildSensor(text){const {header,rows}=splitLines(text);const idx=idxmap(header);const T=rows.length;const o={t:new Float64Array(T)};const map={ax:["acc_x","x"],ay:["acc_y","y"],az:["acc_z","z"],gx:["gyr_x","gx"],gy:["gyr_y","gy"],gz:["gyr_z","gz"]};const ci={};for(const k in map)for(const c of map[k])if(idx[c]!=null){ci[k]=idx[c];break;}for(const k in ci)o[k]=new Float32Array(T);const ti=idx["t"]!=null?idx["t"]:idx["time"];for(let r=0;r<T;r++){const p=rows[r].split(",");o.t[r]=parseFloat(p[ti]);for(const k in ci)o[k][r]=parseFloat(p[ci[k]]);}return o;}
+function readText(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(f);});}
+
+// ---------- classify + subject grouping ----------
+function classify(files){const out={sensors:{},gt:null,preds:{},video:null};
+  for(const f of files){const nm=(f.name||"").toLowerCase();
+    if(nm.endsWith(".mp4")||nm.endsWith(".mov")){out.video=f;continue;}
+    if(!nm.endsWith(".csv"))continue;
+    if(nm.startsWith("prediction")||nm.includes("predictions")||nm.startsWith("pred_")){let m=f.name.replace(/\.csv$/i,"").replace(/^(predictions|prediction|pred)[_]*/i,"")||"default";out.preds[m]=f;continue;}
+    if(nm.startsWith("ground_truth")||nm.includes("gt_3d")){if(!nm.includes("head")&&!nm.includes("test"))out.gt=f;continue;}
+    if(nm.includes("mp_spatial"))continue;
+    for(const s in SENSOR_TOKENS)if(SENSOR_TOKENS[s].some(t=>nm.includes(t))){if(!out.sensors[s]||nm.includes("aligned"))out.sensors[s]=f;break;}}
+  return out;}
+function dirOf(f){const rp=f.webkitRelativePath||f.name;return rp.includes("/")?rp.slice(0,rp.lastIndexOf("/")):"";}
+function groupSubjects(files){const g={};for(const f of files){const d=dirOf(f);(g[d]=g[d]||[]).push(f);}
+  const subs=[];for(const d in g){const c=classify(g[d]);const score=(c.gt?4:0)+Object.keys(c.sensors).length+(c.video?1:0);if(c.gt||Object.keys(c.sensors).length)subs.push({dir:d||"(root)",files:g[d],c,score});}
+  subs.sort((a,b)=>b.score-a.score);return subs;}
+
+async function loadFiles(files){
+  setStatus("Parsing…","none");
+  S.ckpts=files.filter(f=>/\.(pt|pth)$/i.test(f.name)).length;
+  const subs=groupSubjects(files);S.subjects=subs;
+  const sel=document.getElementById("subjectSel");
+  if(subs.length>1){sel.style.display="";sel.innerHTML="";subs.forEach((s,i)=>{const o=document.createElement("option");o.value=i;o.textContent="Subject: "+s.dir.split("/").pop();sel.appendChild(o);});sel.value=0;}
+  else sel.style.display="none";
+  await loadSubject(subs[0]);
+}
+async function loadSubject(sub){
+  S.sensors={};S.models={};S.gt=null;S._gt13=null;freeVideo();
+  if(!sub){setStatus("No subject found — pick a folder with *_aligned.csv and *_gt_3d.csv","warn");renderAll();return;}
+  const c=sub.c;
+  for(const s in c.sensors){try{S.sensors[s]=buildSensor(await readText(c.sensors[s]));}catch(e){}}
+  if(c.gt){try{S.gt=buildGT(await readText(c.gt));}catch(e){setStatus("GT parse error: "+e,"warn");}}
+  for(const m in c.preds){try{const g=buildGT(await readText(c.preds[m]));S.models[m]={time:g.time,J:g.J,T:g.T,nj:g.nj};}catch(e){}}
+  if(c.video)S.videoURL=URL.createObjectURL(c.video);
+  afterLoad();
+}
+function afterLoad(){
+  if(S.gt){S.tmin=S.gt.time[0];S.tmax=S.gt.time[S.gt.T-1];S.t=S.tmin;}
+  const v=document.getElementById("video");
+  document.getElementById("videoHint").style.display="none";
+  document.getElementById("vidConv").style.display="none";
+  document.getElementById("vidConvTxt").textContent="";document.getElementById("vidConvFill").style.width="0%";
+  if(S.videoURL){document.getElementById("noVideo").style.display="none";
+    v.src=S.videoURL;v.load&&v.load();v.style.display="block";}   // just try to play it; if the codec fails, the user clicks Convert
+  else{v.removeAttribute("src");v.style.display="none";document.getElementById("noVideo").style.display="block";}
+  updateTranscodeBtn();
+  const names=Object.keys(S.models);S.curModel=names[0]||null;
+  fillSel("predSelect",names);fillSel("evalSelect",names);
+  document.getElementById("predSelect").style.display=names.length>1?"":"none";
+  const nm=Object.keys(S.sensors).length;
+  const gtBad=S.gt&&S.gt.okCols!=null&&S.gt.okCols<90;
+  const gtMark=S.gt?(gtBad?`⚠ ${S.gt.okCols}/99 cols`:"✓"):"—";
+  const njs=[...new Set(names.map(n=>S.models[n].nj||33))].sort((a,b)=>a-b);
+  let msg=`${nm}/4 sensors · GT ${gtMark} · ${names.length} model(s)${njs.length?" · "+njs.join("/")+"-joint":""} · video ${S.videoURL?"✓":"—"}`;
+  if(gtBad)msg=`⚠ GT joint columns not recognized — only ${S.gt.okCols}/99 found`;
+  else if(!names.length&&S.ckpts)msg+=` · ${S.ckpts} checkpoint(s) detected`;
+  setStatus(msg, gtBad?"warn":(S.gt?(names.length?"ok":"none"):"warn"));
+  const sl=document.getElementById("timeSlider");sl.min=S.tmin;sl.max=S.tmax;sl.value=S.t;
+  computeAllMetrics();renderAll();updateTranscodeBtn();
+}
+function fillSel(id,names){const el=document.getElementById(id);el.innerHTML="";names.forEach(n=>{const o=document.createElement("option");o.value=n;o.textContent=n;el.appendChild(o);});}
+function setStatus(t,cls){const el=document.getElementById("status");el.textContent=t;el.className="status "+(cls||"none");}
+
+// ---------- metrics ----------
+function frameAt(time){if(!S.gt)return 0;const T=S.gt.T,arr=S.gt.time;if(time<=arr[0])return 0;if(time>=arr[T-1])return T-1;let lo=0,hi=T-1;while(lo<hi){const m=(lo+hi)>>1;if(arr[m]<time)lo=m+1;else hi=m;}return(Math.abs(arr[lo]-time)<=Math.abs(arr[lo-1]-time))?lo:lo-1;}
+// root of the skeleton: mid-hip for MediaPipe, joint 0 (pelvis) for the culled topology
+function hip(J,f,a,nj){nj=nj||33;return nj===13?J[(f*13)*3+a]:(J[(f*33+23)*3+a]+J[(f*33+24)*3+a])/2;}
+function jointErrFrame(f,M){const nj=M.nj||33,G=gtFor(M).J,P=M.J,out=new Float32Array(nj);
+  const gh=[hip(G,f,0,nj),hip(G,f,1,nj),hip(G,f,2,nj)],ph=[hip(P,f,0,nj),hip(P,f,1,nj),hip(P,f,2,nj)];
+  for(let j=0;j<nj;j++){let s=0;for(let a=0;a<3;a++){const d=(P[(f*nj+j)*3+a]-ph[a])-(G[(f*nj+j)*3+a]-gh[a]);s+=d*d;}out[j]=Math.sqrt(s)*1000;}return out;}
+function computeMetrics(M){const nj=M.nj||33,GT=gtFor(M),T=Math.min(GT.T,M.T),G=GT.J,P=M.J;
+  const tp=topoFor(M),perJoint=new Float64Array(nj),perFrame=new Float64Array(T);let pck50=0,pck100=0,cnt=0;
+  for(let f=0;f<T;f++){const gh=[hip(G,f,0,nj),hip(G,f,1,nj),hip(G,f,2,nj)],ph=[hip(P,f,0,nj),hip(P,f,1,nj),hip(P,f,2,nj)];let fs=0;
+    for(let j=0;j<nj;j++){let s=0;for(let a=0;a<3;a++){const d=(P[(f*nj+j)*3+a]-ph[a])-(G[(f*nj+j)*3+a]-gh[a]);s+=d*d;}const e=Math.sqrt(s)*1000;perJoint[j]+=e;fs+=e;if(e<50)pck50++;if(e<100)pck100++;cnt++;}perFrame[f]=fs/nj;}
+  for(let j=0;j<nj;j++)perJoint[j]/=T;let mp=0;for(let f=0;f<T;f++)mp+=perFrame[f];mp/=T;
+  let bone=0;for(const [a,b] of tp.conn){let e=0;for(let f=0;f<T;f++)e+=Math.abs(dist(P,f,a,b,nj)-dist(G,f,a,b,nj));bone+=e/T;}bone=bone/tp.conn.length*1000;
+  let ang=0;for(const [a,b,c] of tp.ang){let e=0;for(let f=0;f<T;f++)e+=Math.abs(angle(P,f,a,b,c,nj)-angle(G,f,a,b,c,nj));ang+=e/T;}ang/=tp.ang.length;
+  return{nj,mpjpe:mp,pa:paMpjpe(M),perJoint,perFrame,pck50:pck50/cnt,pck100:pck100/cnt,bone,angle:ang,jitP:jitter(P,GT.time,T,nj),jitG:jitter(G,GT.time,T,nj),T};}
+// Procrustes-aligned MPJPE (Kabsch — verified convention M=Σq·pᵀ, R=U·D·Vᵀ)
+function eig3sym(A){let a=A.map(r=>r.slice());let V=[[1,0,0],[0,1,0],[0,0,1]];
+  for(let it=0;it<60;it++){let p=0,q=1,mx=Math.abs(a[0][1]);if(Math.abs(a[0][2])>mx){mx=Math.abs(a[0][2]);p=0;q=2;}if(Math.abs(a[1][2])>mx){mx=Math.abs(a[1][2]);p=1;q=2;}if(mx<1e-13)break;
+    const app=a[p][p],aqq=a[q][q],apq=a[p][q];const phi=0.5*Math.atan2(2*apq,aqq-app),c=Math.cos(phi),s=Math.sin(phi);
+    for(let k=0;k<3;k++){const kp=a[k][p],kq=a[k][q];a[k][p]=c*kp-s*kq;a[k][q]=s*kp+c*kq;}
+    for(let k=0;k<3;k++){const pk=a[p][k],qk=a[q][k];a[p][k]=c*pk-s*qk;a[q][k]=s*pk+c*qk;}
+    for(let k=0;k<3;k++){const kp=V[k][p],kq=V[k][q];V[k][p]=c*kp-s*kq;V[k][q]=s*kp+c*kq;}}
+  return{V};}
+function mmul(A,B){const C=[[0,0,0],[0,0,0],[0,0,0]];for(let i=0;i<3;i++)for(let j=0;j<3;j++){let s=0;for(let k=0;k<3;k++)s+=A[i][k]*B[k][j];C[i][j]=s;}return C;}
+function mT(M){return[[M[0][0],M[1][0],M[2][0]],[M[0][1],M[1][1],M[2][1]],[M[0][2],M[1][2],M[2][2]]];}
+function mdet(M){return M[0][0]*(M[1][1]*M[2][2]-M[1][2]*M[2][1])-M[0][1]*(M[1][0]*M[2][2]-M[1][2]*M[2][0])+M[0][2]*(M[1][0]*M[2][1]-M[1][1]*M[2][0]);}
+function mapply(R,p){return[R[0][0]*p[0]+R[0][1]*p[1]+R[0][2]*p[2],R[1][0]*p[0]+R[1][1]*p[1]+R[1][2]*p[2],R[2][0]*p[0]+R[2][1]*p[1]+R[2][2]*p[2]];}
+function kabsch(P,Q){const M=[[0,0,0],[0,0,0],[0,0,0]];for(let i=0;i<P.length;i++)for(let a=0;a<3;a++)for(let b=0;b<3;b++)M[a][b]+=Q[i][a]*P[i][b];
+  const {V}=eig3sym(mmul(mT(M),M));const vcol=j=>[V[0][j],V[1][j],V[2][j]];
+  const Uc=[];for(let j=0;j<3;j++){const mv=mapply(M,vcol(j));const s=Math.hypot(...mv);Uc.push(s>1e-9?mv.map(x=>x/s):[0,0,0]);}
+  const U=[[Uc[0][0],Uc[1][0],Uc[2][0]],[Uc[0][1],Uc[1][1],Uc[2][1]],[Uc[0][2],Uc[1][2],Uc[2][2]]];
+  const Vt=mT(V);const d=Math.sign(mdet(mmul(U,Vt)))||1;const D=[[1,0,0],[0,1,0],[0,0,d]];
+  return mmul(mmul(U,D),Vt);}
+function paMpjpe(M){const nj=M.nj||33,GT=gtFor(M),T=Math.min(GT.T,M.T),G=GT.J,P=M.J;const step=Math.max(1,Math.floor(T/1500));let sum=0,cnt=0;
+  for(let f=0;f<T;f+=step){let gx=0,gy=0,gz=0,px=0,py=0,pz=0;
+    for(let j=0;j<nj;j++){gx+=G[(f*nj+j)*3];gy+=G[(f*nj+j)*3+1];gz+=G[(f*nj+j)*3+2];px+=P[(f*nj+j)*3];py+=P[(f*nj+j)*3+1];pz+=P[(f*nj+j)*3+2];}
+    gx/=nj;gy/=nj;gz/=nj;px/=nj;py/=nj;pz/=nj;
+    const Pc=[],Gc=[];for(let j=0;j<nj;j++){Pc.push([P[(f*nj+j)*3]-px,P[(f*nj+j)*3+1]-py,P[(f*nj+j)*3+2]-pz]);Gc.push([G[(f*nj+j)*3]-gx,G[(f*nj+j)*3+1]-gy,G[(f*nj+j)*3+2]-gz]);}
+    const R=kabsch(Pc,Gc);let fs=0;
+    for(let j=0;j<nj;j++){const r=mapply(R,Pc[j]);let s=0;for(let a=0;a<3;a++){const dd=r[a]-Gc[j][a];s+=dd*dd;}fs+=Math.sqrt(s)*1000;}
+    sum+=fs/nj;cnt++;}
+  return cnt?sum/cnt:NaN;}
+function dist(J,f,a,b,nj){nj=nj||33;let s=0;for(let k=0;k<3;k++){const d=J[(f*nj+a)*3+k]-J[(f*nj+b)*3+k];s+=d*d;}return Math.sqrt(s);}
+function angle(J,f,a,b,c,nj){nj=nj||33;const v1=[0,0,0],v2=[0,0,0];for(let k=0;k<3;k++){v1[k]=J[(f*nj+a)*3+k]-J[(f*nj+b)*3+k];v2[k]=J[(f*nj+c)*3+k]-J[(f*nj+b)*3+k];}const dot=v1[0]*v2[0]+v1[1]*v2[1]+v1[2]*v2[2];return Math.acos(Math.max(-1,Math.min(1,dot/(Math.hypot(...v1)*Math.hypot(...v2)+1e-9))))*180/Math.PI;}
+function jitter(J,time,T,nj){nj=nj||33;if(T<5)return NaN;let dt=medDt(time,T);if(!(dt>1e-6))dt=0.02;let sum=0,c=0;for(let f=3;f<T;f++)for(let j=0;j<nj;j++){let s=0;for(let a=0;a<3;a++){const jk=(J[(f*nj+j)*3+a]-3*J[((f-1)*nj+j)*3+a]+3*J[((f-2)*nj+j)*3+a]-J[((f-3)*nj+j)*3+a])/(dt*dt*dt);s+=jk*jk;}sum+=Math.sqrt(s);c++;}return sum/c;}
+function medDt(time,T){const d=[];for(let i=1;i<Math.min(T,400);i++)d.push(time[i]-time[i-1]);d.sort((a,b)=>a-b);return d[d.length>>1]||0.02;}
+function computeAllMetrics(){S.metrics={};if(!S.gt)return;for(const m in S.models)S.metrics[m]=computeMetrics(S.models[m]);}
+
+// ---------- 3D ----------
+function project(x,y,z,az,el){const ca=Math.cos(az),sa=Math.sin(az);let X=x*ca-z*sa,Z=x*sa+z*ca;const ce=Math.cos(el),se=Math.sin(el);return[X,y*ce-Z*se,y*se+Z*ce];}
+function errColor(e){const t=Math.max(0,Math.min(1,e/90));const c=[[47,110,90],[120,150,60],[240,150,60],[255,120,90]];const x=t*3,i=Math.min(2,x|0),fr=x-i,a=c[i],b=c[i+1];return`rgb(${a[0]+(b[0]-a[0])*fr|0},${a[1]+(b[1]-a[1])*fr|0},${a[2]+(b[2]-a[2])*fr|0})`;}
+function drawSkel(){
+  const cv=document.getElementById("skel"),ctx=cv.getContext("2d");const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight||560;
+  if(cv.width!==w*dpr||cv.height!==h*dpr){cv.width=w*dpr;cv.height=h*dpr;}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+  if(!S.gt){ctx.fillStyle="#7d8aa2";ctx.font="14px Inter,sans-serif";ctx.textAlign="center";ctx.fillText("Load a subject to see the 3D pose.",w/2,h/2);return;}
+  const M=(S.curModel&&S.view!=="gt")?S.models[S.curModel]:null;
+  // draw both skeletons in the topology of the active model (13 or 33 joints)
+  const nj=(M&&M.nj)||S.gt.nj||33, tp=M?topoFor(M):topoOf(nj), GTv=M?gtFor(M):S.gt, G=GTv.J;
+  const f=frameAt(S.t),{az,el}=S.cam;
+  const gmid=[hip(G,f,0,nj),hip(G,f,1,nj),hip(G,f,2,nj)];const pts=[];let mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9;
+  for(let j=0;j<nj;j++){const p=project(G[(f*nj+j)*3]-gmid[0],-(G[(f*nj+j)*3+1]-gmid[1]),G[(f*nj+j)*3+2]-gmid[2],az,el);pts.push(p);mnx=Math.min(mnx,p[0]);mxx=Math.max(mxx,p[0]);mny=Math.min(mny,p[1]);mxy=Math.max(mxy,p[1]);}
+  let pp=null,err=null;
+  if(M){const pm=[hip(M.J,f,0,nj),hip(M.J,f,1,nj),hip(M.J,f,2,nj)];pp=[];for(let j=0;j<nj;j++){const p=project(M.J[(f*nj+j)*3]-pm[0],-(M.J[(f*nj+j)*3+1]-pm[1]),M.J[(f*nj+j)*3+2]-pm[2],az,el);pp.push(p);mnx=Math.min(mnx,p[0]);mxx=Math.max(mxx,p[0]);mny=Math.min(mny,p[1]);mxy=Math.max(mxy,p[1]);}err=jointErrFrame(f,M);}
+  const pad=46,scale=Math.min((w-2*pad)/((mxx-mnx)||1),(h-2*pad)/((mxy-mny)||1))*0.95;
+  const cx=w/2-(mnx+mxx)/2*scale,cy=h/2+(mny+mxy)/2*scale;const SX=p=>cx+p[0]*scale,SY=p=>cy-p[1]*scale;
+  const showGT=S.view!=="pred", showP=M&&S.view!=="gt";
+  // error links (faint vectors GT->pred)
+  if(showP&&showGT&&document.getElementById("showErrVec").checked){ctx.lineWidth=1.4;for(let j=0;j<nj;j++){ctx.strokeStyle=errColor(err[j]);ctx.globalAlpha=.55;ctx.beginPath();ctx.moveTo(SX(pts[j]),SY(pts[j]));ctx.lineTo(SX(pp[j]),SY(pp[j]));ctx.stroke();}ctx.globalAlpha=1;}
+  // GT ghost
+  if(showGT){ctx.lineWidth=showP?2:3.2;ctx.strokeStyle=showP?"rgba(74,145,255,.45)":"#4a91ff";ctx.lineCap="round";
+    for(const [a,b] of tp.conn){ctx.beginPath();ctx.moveTo(SX(pts[a]),SY(pts[a]));ctx.lineTo(SX(pts[b]),SY(pts[b]));ctx.stroke();}
+    if(!showP){ctx.fillStyle="#8fc0ff";for(let j=0;j<nj;j++){ctx.beginPath();ctx.arc(SX(pts[j]),SY(pts[j]),3.6,0,7);ctx.fill();}}}
+  // prediction bright + glow
+  if(showP){ctx.save();ctx.shadowColor="rgba(255,138,61,.6)";ctx.shadowBlur=10;ctx.lineWidth=3.6;ctx.strokeStyle="#ff8a3d";ctx.lineCap="round";
+    for(const [a,b] of tp.conn){ctx.beginPath();ctx.moveTo(SX(pp[a]),SY(pp[a]));ctx.lineTo(SX(pp[b]),SY(pp[b]));ctx.stroke();}ctx.restore();
+    for(let j=0;j<nj;j++){ctx.beginPath();ctx.fillStyle=errColor(err[j]);ctx.arc(SX(pp[j]),SY(pp[j]),5,0,7);ctx.fill();ctx.lineWidth=1.4;ctx.strokeStyle="rgba(9,15,28,.9)";ctx.stroke();}}
+}
+function skelLegend(){const has=S.curModel&&S.view!=="gt";const el=document.getElementById("skelLegend");
+  el.innerHTML=`<span class="lg"><i style="border-color:#4a91ff${has&&S.view==='overlay'?';opacity:.6':''}"></i>Ground Truth</span>`+
+   (has?`<span class="lg"><i style="border-color:#ff8a3d"></i>Prediction</span><span class="muted">joint colour = error · drag to rotate</span>`:`<span class="muted">drag to rotate</span>`);}
+
+// ---------- charts with hover ----------
+const CH={};
+function lineChart(cid,series,opts){CH[cid]={series,opts};_line(cid,series,opts);}
+function _line(cid,series,opts,hoverPx){const cv=document.getElementById(cid),ctx=cv.getContext("2d");const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight||300;
+  if(cv.width!==w*dpr||cv.height!==h*dpr){cv.width=w*dpr;cv.height=h*dpr;}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+  opts=opts||{};const pad={l:54,r:16,t:14,b:34};let xmin=opts.xmin,xmax=opts.xmax,ymin=1e9,ymax=-1e9;
+  if(xmin==null){xmin=1e9;xmax=-1e9;series.forEach(s=>{if(s.x.length){xmin=Math.min(xmin,s.x[0]);xmax=Math.max(xmax,s.x[s.x.length-1]);}});}
+  series.forEach(s=>{for(let i=0;i<s.y.length;i++){if(s.y[i]<ymin)ymin=s.y[i];if(s.y[i]>ymax)ymax=s.y[i];}});if(!(ymax>ymin)){ymax=1;ymin=0;}const yp=(ymax-ymin)*.08;ymin-=yp;ymax+=yp;
+  const X=x=>pad.l+(x-xmin)/(xmax-xmin)*(w-pad.l-pad.r),Y=y=>h-pad.b-(y-ymin)/(ymax-ymin)*(h-pad.t-pad.b);
+  ctx.strokeStyle="rgba(126,150,190,.12)";ctx.lineWidth=1;ctx.fillStyle="#7d8aa2";ctx.font="11px Inter,sans-serif";
+  for(let g=0;g<=4;g++){const yy=ymin+(ymax-ymin)*g/4;ctx.beginPath();ctx.moveTo(pad.l,Y(yy));ctx.lineTo(w-pad.r,Y(yy));ctx.stroke();ctx.textAlign="right";ctx.fillText(yy.toFixed(opts.yfix??0),pad.l-6,Y(yy)+3);}
+  ctx.textAlign="center";for(let g=0;g<=5;g++){const xx=xmin+(xmax-xmin)*g/5;ctx.fillText(xx.toFixed(0),X(xx),h-pad.b+16);}
+  ctx.fillText(opts.xlabel||"",w/2,h-4);ctx.save();ctx.translate(13,h/2);ctx.rotate(-Math.PI/2);ctx.fillText(opts.ylabel||"",0,0);ctx.restore();
+  series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.w||1.6;ctx.setLineDash(s.dash||[]);ctx.beginPath();for(let i=0;i<s.x.length;i++){const px=X(s.x[i]),py=Y(s.y[i]);i?ctx.lineTo(px,py):ctx.moveTo(px,py);}ctx.stroke();});ctx.setLineDash([]);
+  if(opts.mean!=null){const my=Y(opts.mean);ctx.strokeStyle="rgba(126,150,190,.5)";ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(pad.l,my);ctx.lineTo(w-pad.r,my);ctx.stroke();ctx.setLineDash([]);ctx.textAlign="left";ctx.fillText("mean "+opts.mean.toFixed(0),pad.l+6,my-4);}
+  const cursorX=(hoverPx!=null)?xmin+(hoverPx-pad.l)/(w-pad.l-pad.r)*(xmax-xmin):opts.cursor;
+  if(cursorX!=null&&cursorX>=xmin&&cursorX<=xmax){const cxp=X(cursorX);ctx.strokeStyle="rgba(238,243,251,.65)";ctx.lineWidth=1.4;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(cxp,pad.t);ctx.lineTo(cxp,h-pad.b);ctx.stroke();ctx.setLineDash([]);}
+  cv._map={X,Y,xmin,xmax,ymin,ymax,pad,w,h};
+}
+function attachHover(cid,fmt){const cv=document.getElementById(cid),tt=document.getElementById("tooltip");
+  cv.addEventListener("mousemove",e=>{const r=cv.getBoundingClientRect(),px=e.clientX-r.left;const st=CH[cid];if(!st)return;_line(cid,st.series,st.opts,px);
+    const m=cv._map;if(!m)return;const xv=m.xmin+(px-m.pad.l)/(m.w-m.pad.l-m.pad.r)*(m.xmax-m.xmin);
+    if(xv<m.xmin||xv>m.xmax){tt.style.display="none";return;}tt.innerHTML=fmt(xv,st);tt.style.display="block";tt.style.left=(e.clientX+12)+"px";tt.style.top=(e.clientY+12)+"px";});
+  cv.addEventListener("mouseleave",()=>{tt.style.display="none";const st=CH[cid];if(st)_line(cid,st.series,st.opts);});}
+
+// ---------- render ----------
+function smoothArr(a,w){const n=a.length,c=a.slice(),h=w>>1;for(let i=0;i<n;i++){let s=0,k=0;for(let j=Math.max(0,i-h),e=Math.min(n-1,i+h);j<=e;j++){s+=c[j];k++;}a[i]=s/k;}}
+function decimate(x,y,max){const n=x.length;if(n<=max)return{x:Array.from(x),y:Array.from(y)};const st=Math.ceil(n/max),ox=[],oy=[];for(let i=0;i<n;i+=st){ox.push(x[i]);oy.push(y[i]);}return{x:ox,y:oy};}
+const SIG_ORDER=["Left Wrist","Right Wrist","Left Ankle","Right Ankle"];
+function ensureSigGrid(){const g=document.getElementById("sigGrid");if(g.dataset.built)return;g.dataset.built="1";
+  SIG_ORDER.forEach((s,i)=>{const c=document.createElement("div");c.className="card sigcell";
+    c.innerHTML=`<div class="title"><span class="swatch" style="background:${SENSOR_COLOR[s]}"></span>${s} <span class="tag" id="sigTag${i}">—</span></div><canvas id="sig${i}" height="212"></canvas>`;
+    g.appendChild(c);attachHover("sig"+i,(x)=>`<b>${SIG_ORDER[i]}</b><br>t = ${x.toFixed(2)} s`);});}
+function magSeries(d,axes){const t=d.t,n=t.length,y=new Float32Array(n);for(let i=0;i<n;i++){let s=0;for(const a of axes){const v=d[a]?d[a][i]:0;s+=v*v;}y[i]=Math.sqrt(s);}return y;}
+function renderSignals(){ensureSigGrid();
+  if(!document.getElementById("panel-signals").classList.contains("active"))return;
+  const src=document.querySelector("#sigSourceSeg .on").dataset.v,norm=document.getElementById("normSig").checked;
+  const axes=src==="acc"?["ax","ay","az"]:["gx","gy","gz"],dash=[null,[2,3],[7,5]];
+  // ----- synced overlay: signal magnitude per wearable on one time axis -----
+  const ov=[],ovlg=[];
+  SIG_ORDER.forEach(s=>{const d=S.sensors[s];if(!d||!d[axes[0]])return;const dec=decimate(d.t,magSeries(d,axes),2500);ov.push({x:dec.x,y:dec.y,color:SENSOR_COLOR[s],w:1.6});ovlg.push(`<span class="lg"><i style="border-color:${SENSOR_COLOR[s]}"></i>${s}</span>`);});
+  document.getElementById("sigOverlayLegend").innerHTML=ovlg.join("")+`<span class="muted">${src==="acc"?"|acceleration|":"|angular velocity|"} · shared time axis</span>`;
+  if(ov.length)lineChart("sigOverlay",ov,{xlabel:"time (s)",ylabel:src==="acc"?"|a| (m/s²)":"|ω| (rad/s)",cursor:S.t,yfix:1});
+  else lineChart("sigOverlay",[{x:[0,1],y:[0,0],color:"rgba(126,150,190,.15)"}],{xlabel:"time (s)"});
+  // ----- per-wearable panels (line style = axis) -----
+  SIG_ORDER.forEach((s,i)=>{const d=S.sensors[s],tag=document.getElementById("sigTag"+i);
+    if(!d||!d[axes[0]]){lineChart("sig"+i,[{x:[0,1],y:[0,0],color:"rgba(126,150,190,.15)"}],{xlabel:"time (s)"});if(tag)tag.textContent="no data";return;}
+    let scale=1;const means=[0,0,0];
+    if(norm){let mx=1e-9;for(let a=0;a<3;a++){const y=d[axes[a]];let m=0;for(let k=0;k<y.length;k++)m+=y[k];m/=y.length||1;means[a]=m;let s2=0;for(let k=0;k<y.length;k++){const dd=Math.abs(y[k]-m);if(dd>s2)s2=dd;}if(s2>mx)mx=s2;}scale=mx;}
+    const series=[];for(let a=0;a<3;a++){let y=d[axes[a]];if(norm)y=Array.from(y,v=>(v-means[a])/scale);const dec=decimate(d.t,y,2000);series.push({x:dec.x,y:dec.y,color:SENSOR_COLOR[s],dash:dash[a],w:1.5});}
+    if(tag)tag.textContent=src==="acc"?"accel · X Y Z":"gyro · X Y Z";
+    lineChart("sig"+i,series,{xlabel:"time (s)",ylabel:norm?"scaled (0-centred)":(src==="acc"?"m/s²":"rad/s"),cursor:S.t,yfix:norm?2:1});});}
+function renderPred(){drawSkel();skelLegend();const box=document.getElementById("predKpis");box.innerHTML="";
+  if(!S.gt){box.innerHTML='<div class="tip" style="grid-column:span 6">Load a subject to view the pose.</div>';return;}
+  if(S.curModel){const f=frameAt(S.t),M=S.models[S.curModel],nj=M.nj||33,tp=topoFor(M),GJ=gtFor(M).J;
+    const e=jointErrFrame(f,M),mp=e.reduce((a,b)=>a+b,0)/nj;
+    kpi(box,"MPJPE (frame)",mp.toFixed(0),"mm · position error",true);
+    const be=tp.conn.reduce((s,[a,b])=>s+Math.abs(dist(M.J,f,a,b,nj)-dist(GJ,f,a,b,nj)),0)/tp.conn.length*1000;kpi(box,"Bone-length err",be.toFixed(0),"mm · rigidity");
+    const ae=tp.ang.reduce((s,[a,b,c])=>s+Math.abs(angle(M.J,f,a,b,c,nj)-angle(GJ,f,a,b,c,nj)),0)/tp.ang.length;kpi(box,"Angle err",ae.toFixed(1)+"°","elbows & knees");
+  } else box.innerHTML='<div class="tip" style="grid-column:span 6">No model predictions for this subject yet.</div>';}
+function kpi(box,l,v,s,hero){const d=document.createElement("div");d.className="kpi"+(hero?" hero":"");d.innerHTML=`<div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div>`;box.appendChild(d);}
+function renderEval(){if(!document.getElementById("panel-eval").classList.contains("active"))return;
+  const names=Object.keys(S.models);const compare=document.getElementById("compareAll").checked&&names.length>1;
+  document.getElementById("evalSingle").style.display=compare?"none":(names.length?"":"none");
+  document.getElementById("evalCompare").style.display=compare?"":"none";
+  const emp=document.getElementById("evalEmpty");
+  if(!S.gt||!names.length){emp.style.display="";
+    emp.innerHTML=SERVER
+      ? `<div class="card"><div class="empty"><div class="big">No model predictions yet</div>Select a checkpoint in the panel above and run it.</div></div>`
+      : `<div class="card"><div class="empty"><div class="big">No models to evaluate yet</div>
+        Start the dashboard with <code>python serve.py</code> to run models on this subject.</div></div>`;
+    document.getElementById("evalNote").textContent="";return;}
+  emp.style.display="none";
+  if(compare){renderCompare();return;}
+  const mn=document.getElementById("evalSelect").value||names[0],m=S.metrics[mn],M=S.models[mn];if(!m||!M)return;
+  document.getElementById("evalNote").textContent="live on the loaded sequence · GT jitter "+m.jitG.toFixed(0)+" m/s³";
+  const box=document.getElementById("evalKpis");box.innerHTML="";
+  kpi(box,"MPJPE",m.mpjpe.toFixed(0),"mm · mean per-joint error");
+  kpi(box,"PA-MPJPE",m.pa.toFixed(0),"mm · Procrustes-aligned");
+  kpi(box,"PCK@50",(m.pck50*100).toFixed(0)+"%","joints < 50 mm");
+  kpi(box,"PCK@100",(m.pck100*100).toFixed(0)+"%","joints < 100 mm");
+  kpi(box,"Jitter",m.jitP.toFixed(0),"m/s³ · smoothness (GT "+m.jitG.toFixed(0)+")");
+  kpi(box,"Bone-length err",m.bone.toFixed(0),"mm · rigidity");
+  kpi(box,"Angle err",m.angle.toFixed(1)+"°","elbows & knees");
+  const dec=decimate(S.gt.time.subarray(0,m.T),m.perFrame,3000);
+  lineChart("errTime",[{x:dec.x,y:dec.y,color:"#4a91ff",w:1.7}],{xlabel:"time (s)",ylabel:"MPJPE (mm)",cursor:S.t,mean:m.mpjpe});
+  const NJ=m.nj||33,NM=topoFor(M).names;const order=[...Array(NJ).keys()].sort((a,b)=>m.perJoint[b]-m.perJoint[a]),vmax=m.perJoint[order[0]]||1,pj=document.getElementById("perJoint");pj.innerHTML="";
+  order.forEach(j=>{const v=m.perJoint[j],d=document.createElement("div");d.className="bar";d.innerHTML=`<div class="nm">${NM[j]}</div><div class="tr"><div class="fl" style="width:${v/vmax*100}%;background:${errColor(v)}"></div></div><div class="vv">${v.toFixed(1)} mm</div>`;pj.appendChild(d);});
+  drawHeatmap("heat",M,m);drawHist("hist",M);}
+function renderCompare(){const names=Object.keys(S.models);document.getElementById("evalNote").textContent="live · sorted by MPJPE";
+  const rows=names.map(n=>({n,m:S.metrics[n]})).sort((a,b)=>a.m.mpjpe-b.m.mpjpe);
+  let html="<table><tr><th>#</th><th>Model</th><th>MPJPE</th><th>PA-MPJPE</th><th>PCK@50</th><th>PCK@100</th><th>Jitter</th><th>Bone</th><th>Angle</th></tr>";
+  rows.forEach((r,i)=>html+=`<tr class="${i===0?'best':''}"><td>${i+1}</td><td>${r.n}${i===0?' ★':''}</td><td>${r.m.mpjpe.toFixed(1)}</td><td>${r.m.pa.toFixed(1)}</td><td>${(r.m.pck50*100).toFixed(0)}%</td><td>${(r.m.pck100*100).toFixed(0)}%</td><td>${r.m.jitP.toFixed(0)}</td><td>${r.m.bone.toFixed(0)}</td><td>${r.m.angle.toFixed(1)}</td></tr>`);
+  document.getElementById("cmpTable").innerHTML=html+"</table>";
+  barSet("cmpMpjpe",names.map(n=>[n,S.metrics[n].mpjpe]),true);barSet("cmpJit",names.map(n=>[n,S.metrics[n].jitP]),true);
+  drawRadar("cmpRadar",names);}
+// ---------- heatmap · histogram · radar ----------
+function drawHeatmap(cid,M,m){const cv=document.getElementById(cid),ctx=cv.getContext("2d");const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight||452;
+  if(!w)return;if(cv.width!==w*dpr||cv.height!==h*dpr){cv.width=w*dpr;cv.height=h*dpr;}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+  const padL=118,padT=8,padB=24,padR=14;const gw=w-padL-padR,gh=h-padT-padB;
+  const T=Math.min(S.gt.T,M.T),bins=Math.max(20,Math.min(160,Math.floor(gw/6)));
+  const NJ=m.nj||33,NM=topoFor(M).names;const acc=new Float64Array(NJ*bins),cnt=new Float64Array(bins);
+  for(let f=0;f<T;f++){const b=Math.min(bins-1,Math.floor(f/T*bins));const e=jointErrFrame(f,M);for(let j=0;j<NJ;j++)acc[j*bins+b]+=e[j];cnt[b]++;}
+  for(let b=0;b<bins;b++)if(cnt[b])for(let j=0;j<NJ;j++)acc[j*bins+b]/=cnt[b];
+  const order=[...Array(NJ).keys()].sort((a,b)=>m.perJoint[b]-m.perJoint[a]);
+  const cw=gw/bins,ch=gh/NJ;ctx.font="10px Inter,sans-serif";ctx.textBaseline="middle";
+  order.forEach((j,row)=>{const y=padT+row*ch;for(let b=0;b<bins;b++){ctx.fillStyle=errColor(acc[j*bins+b]);ctx.fillRect(padL+b*cw,y,cw+.7,ch+.7);}
+    ctx.fillStyle="#aeb9cd";ctx.textAlign="right";ctx.fillText(NM[j].slice(0,17),padL-8,y+ch/2);});
+  ctx.fillStyle="#7d8aa2";ctx.textAlign="center";ctx.textBaseline="alphabetic";
+  const t0=S.gt.time[0],t1=S.gt.time[T-1];for(let g=0;g<=5;g++)ctx.fillText((t0+(t1-t0)*g/5).toFixed(0)+"s",padL+gw*g/5,h-7);
+  const cf=(S.t-t0)/((t1-t0)||1);if(cf>=0&&cf<=1){ctx.strokeStyle="rgba(238,243,251,.75)";ctx.lineWidth=1.4;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(padL+cf*gw,padT);ctx.lineTo(padL+cf*gw,padT+gh);ctx.stroke();ctx.setLineDash([]);}}
+function drawHist(cid,M){const cv=document.getElementById(cid),ctx=cv.getContext("2d");const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight||250;
+  if(!w)return;if(cv.width!==w*dpr||cv.height!==h*dpr){cv.width=w*dpr;cv.height=h*dpr;}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+  const T=Math.min(S.gt.T,M.T),step=Math.max(1,Math.floor(T/800)),vals=[];
+  const NJ=M.nj||33;for(let f=0;f<T;f+=step){const e=jointErrFrame(f,M);for(let j=0;j<NJ;j++)vals.push(e[j]);}
+  if(!vals.length)return;vals.sort((a,b)=>a-b);const med=vals[vals.length>>1],p99=vals[Math.floor(vals.length*.99)]||1,mean=vals.reduce((a,b)=>a+b,0)/vals.length;
+  const nb=30,hi=Math.max(p99,1),bins=new Float64Array(nb);vals.forEach(v=>{bins[Math.min(nb-1,Math.floor(v/hi*nb))]++;});
+  const vmax=Math.max(...bins)||1,padL=46,padR=12,padT=12,padB=34,gw=w-padL-padR,gh=h-padT-padB,bw=gw/nb;
+  ctx.fillStyle="#7d8aa2";ctx.font="11px Inter,sans-serif";ctx.textAlign="right";ctx.textBaseline="middle";
+  for(let g=0;g<=4;g++){const yy=padT+gh-gh*g/4,val=vmax*g/4;ctx.fillStyle="rgba(126,150,190,.12)";ctx.fillRect(padL,yy,gw,1);ctx.fillStyle="#7d8aa2";ctx.fillText((val|0),padL-6,yy);}
+  for(let b=0;b<nb;b++){const bh=bins[b]/vmax*gh;ctx.fillStyle=errColor((b+.5)/nb*hi);ctx.fillRect(padL+b*bw+1,padT+gh-bh,bw-2,bh);}
+  ctx.strokeStyle="rgba(126,150,190,.25)";ctx.beginPath();ctx.moveTo(padL,padT+gh);ctx.lineTo(w-padR,padT+gh);ctx.stroke();
+  ctx.fillStyle="#7d8aa2";ctx.textAlign="center";ctx.textBaseline="alphabetic";
+  for(let g=0;g<=5;g++)ctx.fillText((hi*g/5).toFixed(0),padL+gw*g/5,padT+gh+16);
+  ctx.fillText("per-joint error (mm)",padL+gw/2,h-4);
+  const X=v=>padL+Math.min(1,v/hi)*gw;
+  [["median",med,"#67e8f9"],["mean",mean,"#ff8a3d"]].forEach(([lab,v,col],k)=>{const x=X(v);ctx.strokeStyle=col;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(x,padT);ctx.lineTo(x,padT+gh);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=col;ctx.textAlign="left";ctx.fillText(lab+" "+v.toFixed(0),x+4,padT+12+k*14);});}
+function drawRadar(cid,names){const cv=document.getElementById(cid),ctx=cv.getContext("2d");const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight||430;
+  if(!w)return;if(cv.width!==w*dpr||cv.height!==h*dpr){cv.width=w*dpr;cv.height=h*dpr;}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+  const defs=[["MPJPE",m=>m.mpjpe,1],["PA-MPJPE",m=>m.pa,1],["PCK@50",m=>m.pck50,0],["PCK@100",m=>m.pck100,0],["Jitter",m=>m.jitP,1],["Bone",m=>m.bone,1],["Angle",m=>m.angle,1]];
+  const N=defs.length,cx=w/2,cy=h/2+10,R=Math.min(w,h)/2-58;
+  const norm=defs.map(([lab,acc,low])=>{const vs=names.map(n=>acc(S.metrics[n]));const mn=Math.min(...vs),mx=Math.max(...vs);return v=>{if(mx-mn<1e-9)return .75;const t=(v-mn)/(mx-mn);return low?1-t:t;};});
+  ctx.strokeStyle="rgba(126,150,190,.15)";for(let r=1;r<=4;r++){ctx.beginPath();for(let i=0;i<=N;i++){const a=-Math.PI/2+(i%N)*2*Math.PI/N,rr=R*r/4,x=cx+Math.cos(a)*rr,y=cy+Math.sin(a)*rr;i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.closePath();ctx.stroke();}
+  ctx.fillStyle="#aeb9cd";ctx.font="11px Inter,sans-serif";ctx.textBaseline="middle";
+  defs.forEach(([lab],i)=>{const a=-Math.PI/2+i*2*Math.PI/N,x=cx+Math.cos(a)*R,y=cy+Math.sin(a)*R;ctx.strokeStyle="rgba(126,150,190,.15)";ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(x,y);ctx.stroke();
+    const lx=cx+Math.cos(a)*(R+20),ly=cy+Math.sin(a)*(R+14);ctx.textAlign=Math.abs(Math.cos(a))<.3?"center":(Math.cos(a)>0?"left":"right");ctx.fillText(lab,lx,ly);});
+  names.forEach((n,k)=>{const col=MODEL_PALETTE[k%MODEL_PALETTE.length],m=S.metrics[n];ctx.beginPath();
+    defs.forEach(([lab,acc],i)=>{const v=norm[i](acc(m)),a=-Math.PI/2+i*2*Math.PI/N,rr=R*(0.08+0.92*v),x=cx+Math.cos(a)*rr,y=cy+Math.sin(a)*rr;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.closePath();ctx.fillStyle=col+"22";ctx.fill();ctx.strokeStyle=col;ctx.lineWidth=2;ctx.stroke();
+    defs.forEach(([lab,acc],i)=>{const v=norm[i](acc(m)),a=-Math.PI/2+i*2*Math.PI/N,rr=R*(0.08+0.92*v);ctx.beginPath();ctx.fillStyle=col;ctx.arc(cx+Math.cos(a)*rr,cy+Math.sin(a)*rr,3,0,7);ctx.fill();});});
+  ctx.textAlign="left";ctx.textBaseline="alphabetic";names.forEach((n,k)=>{const col=MODEL_PALETTE[k%MODEL_PALETTE.length],y=16+k*15;ctx.fillStyle=col;ctx.fillRect(12,y-8,12,4);ctx.fillStyle="#aeb9cd";ctx.fillText(n,30,y-3);});}
+function barSet(id,pairs,lower){const el=document.getElementById(id);el.innerHTML="";const sorted=[...pairs].sort((a,b)=>lower?a[1]-b[1]:b[1]-a[1]);const best=sorted[0][0],vmax=Math.max(...pairs.map(p=>p[1]))||1;
+  sorted.forEach(([n,v])=>{const c=MODEL_PALETTE[pairs.findIndex(p=>p[0]===n)%MODEL_PALETTE.length];const d=document.createElement("div");d.className="bar";d.innerHTML=`<div class="nm" style="width:100px">${n}</div><div class="tr"><div class="fl" style="width:${v/vmax*100}%;background:${c}"></div></div><div class="vv">${v.toFixed(1)}${n===best?" ★":""}</div>`;el.appendChild(d);});}
+// ---------- server mode (in-app inference via serve.py) ----------
+async function serverScan(){const root=document.getElementById("rootInput").value.trim();if(!root)return;
+  setStatus("Scanning…","none");
+  try{SCAN=await (await fetch("/api/scan?root="+encodeURIComponent(root))).json();}catch(e){setStatus("Scan failed: "+e,"warn");return;}
+  const sel=document.getElementById("subjectSel");sel.style.display=SCAN.subjects.length?"":"none";sel.innerHTML="";
+  SCAN.subjects.forEach((s,i)=>{const o=document.createElement("option");o.value=i;o.textContent="Subject: "+s.name;sel.appendChild(o);});
+  if(SCAN.subjects.length)await serverLoadSubject(0);else afterLoad();
+  renderRunPanel();
+  setStatus(`${SCAN.subjects.length} subject(s) · ${SCAN.checkpoints.length} checkpoint(s)`+(SCAN.torch?"":" · ⚠ torch not installed"),SCAN.checkpoints.length?"ok":"none");}
+let LOADSEQ=0, CURSUBJ=0;
+// Each load gets a sequence number. If a second one starts during the await
+// gaps (fast switching between recordings), the first aborts at its next
+// checkpoint; otherwise both write into the same state object.
+async function serverLoadSubject(i,bust){const sub=SCAN.subjects[i];if(!sub)return;
+  const my=++LOADSEQ, stale=()=>my!==LOADSEQ;
+  CURSUBJ=i;CURDIR=sub.dir;
+  const v=bust?("&_v="+Date.now()):"";
+  const vq=u=>u+(u.indexOf("?")<0?"?":"&")+(bust?("_v="+Date.now()):"");
+  freeVideo();S.sensors={};S.models={};S.gt=null;S._gt13=null;S.curModel=null;
+  setStatus("Loading "+sub.name+" \u2026","none");
+  let d;
+  try{d=await (await fetch("/api/data?dir="+encodeURIComponent(sub.dir)+v)).json();}
+  catch(e){if(!stale())setStatus("Load failed: "+e,"warn");return;}
+  if(stale())return;
+  if(d.gt)try{S.gt=buildGT(await (await fetch(vq(d.gt))).text());}catch(e){}
+  if(stale())return;
+  for(const s in d.sensors)try{S.sensors[s]=buildSensor(await (await fetch(vq(d.sensors[s]))).text());}catch(e){}
+  if(stale())return;
+  for(const m in d.models)try{const g=buildGT(await (await fetch(vq(d.models[m]))).text());S.models[m]={time:g.time,J:g.J,T:g.T,nj:g.nj};
+    const tu=(d.topologies||{})[m];
+    if(tu)try{const t=await (await fetch(vq(tu))).json();const tp=topoFromParents(t.parents,t.names);if(tp)S.models[m].topo=tp;}catch(e){}
+  }catch(e){}
+  if(stale())return;
+  S.videoURL=d.video||null;
+  S.videoSrcPath=d.video_src||null;         // original file on disk (for conversion)
+  S.videoPlayable=d.video_playable;         // true / false / null(unknown)
+  SCAN.ffmpeg=(d.ffmpeg!=null)?d.ffmpeg:SCAN.ffmpeg;
+  document.getElementById("reloadBtn").style.display="";
+  afterLoad();renderRunPanel();
+  setStatus(sub.name+" \u00b7 "+Object.keys(S.models).length+" model(s)","ok");}
+function serverPathOf(url){if(!url)return null;const i=url.indexOf("path=");return i<0?null:decodeURIComponent(url.slice(i+5));}
+function updateTranscodeBtn(){const b=document.getElementById("transcodeBtn");
+  // visible whenever a video is loaded in server mode — also for an already converted
+  // clip, so a broken/partial conversion can simply be redone
+  b.style.display=(SERVER&&S.videoURL&&!S.converting)?"":"none";}
+function renderRunPanel(){const el=document.getElementById("runPanel");if(!SERVER||!SCAN.checkpoints.length){el.style.display="none";el.innerHTML="";return;}el.style.display="";
+  const opts=SCAN.checkpoints.map((c,i)=>`<label class="chk" style="display:block;margin:4px 0"><input type="checkbox" class="ckbox" value="${i}"> <b>${c.name}</b> · ${c.arch} · win${c.window} hid${c.hidden} lay${c.layers}</label>`).join("");
+  el.innerHTML=`<div class="card" style="margin-bottom:14px"><div class="title">Run a model on this subject</div>
+    <div class="muted" style="margin:2px 0 8px">${SCAN.checkpoints.length} checkpoint(s) found${SCAN.torch?"":' · <b style="color:#ffbf5b">torch required</b>'}</div>
+    ${opts}
+    <label class="chk" style="margin:8px 0 2px"><input type="checkbox" id="fastPreview"> Fast preview (every 4th frame)</label>
+    <div style="margin-top:8px"><button class="btn primary" id="runBtn">▶ Run selected</button> <span id="runStatus" class="muted"></span></div>
+    <div id="runProg" style="display:none;margin-top:10px"><div style="height:10px;background:rgba(126,150,190,.14);border-radius:6px;overflow:hidden"><div id="runProgFill" style="height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .2s"></div></div><div id="runProgTxt" class="muted" style="margin-top:5px"></div></div>
+    </div>`;
+  document.getElementById("runBtn").onclick=()=>serverRun([...el.querySelectorAll(".ckbox:checked")].map(x=>+x.value));}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function serverRun(idx){const rs=document.getElementById("runStatus"),root=document.getElementById("rootInput").value.trim();
+  const prog=document.getElementById("runProg"),fill=document.getElementById("runProgFill"),ptxt=document.getElementById("runProgTxt"),btn=document.getElementById("runBtn");
+  if(!idx.length){rs.textContent="pick at least one checkpoint";return;}
+  const stride=document.getElementById("fastPreview")&&document.getElementById("fastPreview").checked?4:1;
+  const ok=[],fail=[];btn.disabled=true;
+  for(let k=0;k<idx.length;k++){const c=SCAN.checkpoints[idx[k]];
+    rs.innerHTML=`⏳ <b>${c.name}</b> (${k+1}/${idx.length})`;prog.style.display="";fill.style.width="0%";ptxt.textContent="starting…";
+    try{const j=await (await fetch("/api/infer",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({root,dir:CURDIR,checkpoint:c.path,stride})})).json();
+      if(j.error||!j.job){fail.push([c.name,j.error||"could not start job"]);continue;}
+      let res=null;const t0=performance.now();
+      for(;;){await sleep(400);let p;try{p=await (await fetch("/api/progress?job="+j.job)).json();}catch(e){continue;}
+        if(p.total){const pct=Math.min(100,p.done/p.total*100);fill.style.width=pct.toFixed(1)+"%";
+          const el=(performance.now()-t0)/1000,eta=p.done?el*(p.total-p.done)/p.done:0;
+          ptxt.textContent=`${p.stage||"running"} · ${p.done}/${p.total} frames (${pct.toFixed(0)}%) · ~${eta<1?"<1":Math.round(eta)}s left`;}
+        else ptxt.textContent=(p.stage||"preparing")+" …";
+        if(p.status==="done"){fill.style.width="100%";ptxt.textContent=`finished in ${p.secs||"?"}s`;res=p;break;}
+        if(p.status==="error"){fail.push([c.name,p.error||"failed"]);break;}
+        if(p.status==="unknown"){fail.push([c.name,"job lost (server restarted?)"]);break;}}
+      if(res){try{const g=buildGT(await (await fetch(res.url)).text());
+        if(!g.T||g.okCols<90)fail.push([c.name,"prediction has no readable joint columns"]);
+        else{S.models[res.name]={time:g.time,J:g.J,T:g.T,nj:g.nj};ok.push(res.name);}}catch(e){fail.push([c.name,String(e)]);}}
+    }catch(e){fail.push([c.name,String(e)]);}}
+  prog.style.display="none";btn.disabled=false;
+  // Reload instead of patching S.models by hand: only then is the
+  // predictions__<name>.topology.json sidecar picked up, so a 13-joint model is
+  // drawn with the correct skeleton.
+  if(SERVER&&ok.length){await serverLoadSubject(CURSUBJ,true);}
+  else{const names=Object.keys(S.models);S.curModel=S.curModel&&names.includes(S.curModel)?S.curModel:(names[0]||null);
+    fillSel("predSelect",names);fillSel("evalSelect",names);document.getElementById("predSelect").style.display=names.length>1?"":"none";
+    computeAllMetrics();renderAll();}
+  let html=ok.length?`<b style="color:#2fd6a0">✓ ${ok.length} model(s) ready — see Evaluation</b>`:"";
+  if(fail.length){html+=(html?" · ":"")+`<b style="color:#ff8a3d">${fail.length} failed</b>`;
+    html+=`<div style="margin-top:6px;color:#ffd79a;font-size:.82em;line-height:1.5">`+fail.map(([n,e])=>`• <b>${n}</b>: ${e}`).join("<br>")+`</div>`;}
+  rs.innerHTML=html||"nothing ran";}
+function freeVideo(){if(S.videoURL&&S.videoURL.startsWith("blob:"))URL.revokeObjectURL(S.videoURL);S.videoURL=null;S.videoSrcPath=null;S.videoPlayable=null;S.converting=false;clearTimeout(S._vwatch);}
+
+function renderAll(){renderSignals();renderPred();renderEval();updateTimeLabel();}
+function updateTimeLabel(){const f=t=>{t=Math.max(0,t);const m=t/60|0,s=t%60;return String(m).padStart(2,"0")+":"+s.toFixed(1).padStart(4,"0");};document.getElementById("timeLabel").textContent=`${f(S.t-S.tmin)} / ${f(S.tmax-S.tmin)}`;}
+
+// ---------- playback ----------
+const video=document.getElementById("video");
+function setTime(t,seek){S.t=Math.max(S.tmin,Math.min(S.tmax,t));document.getElementById("timeSlider").value=S.t;if(seek&&S.videoURL)video.currentTime=Math.max(0,S.t);drawSkel();renderSignals();renderEval();updateTimeLabel();}
+function loop(){if(!S.playing)return;if(S.videoURL&&!video.paused)S.t=video.currentTime;else{S.t+=1/60;if(S.t>=S.tmax){S.t=S.tmax;stop();}}document.getElementById("timeSlider").value=S.t;drawSkel();updateTimeLabel();requestAnimationFrame(loop);}
+function play(){S.playing=true;document.getElementById("playBtn").textContent="❚❚ Pause";if(S.videoURL)video.play().catch(()=>{});requestAnimationFrame(loop);}
+function stop(){S.playing=false;document.getElementById("playBtn").textContent="▶ Play";if(S.videoURL)video.pause();}
+
+// ---------- wiring ----------
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));t.classList.add("active");document.querySelectorAll(".panel-sec").forEach(p=>p.classList.remove("active"));document.getElementById("panel-"+t.dataset.tab).classList.add("active");renderAll();});
+document.getElementById("pickFolder").onclick=()=>SERVER?pickServerFolder():document.getElementById("folderInput").click();
+function pickServerFolder(){setStatus("Opening folder chooser…","none");
+  fetch("/api/pickfolder").then(r=>r.json()).then(d=>{
+    if(d&&d.path){document.getElementById("rootInput").value=d.path;serverScan();}
+    else setStatus("No folder chosen — you can also paste the path and hit Scan","warn");
+  }).catch(()=>setStatus("Folder chooser unavailable here — paste the path in the box and hit Scan","warn"));}
+document.getElementById("pickFiles").onclick=()=>document.getElementById("filesInput").click();
+document.getElementById("folderInput").onchange=e=>loadFiles([...e.target.files]);
+document.getElementById("filesInput").onchange=e=>loadFiles([...e.target.files]);
+document.getElementById("subjectSel").onchange=e=>SERVER?serverLoadSubject(+e.target.value):loadSubject(S.subjects[+e.target.value]);
+document.getElementById("reloadBtn").onclick=()=>{
+  if(SERVER)serverLoadSubject(CURSUBJ,true);
+  else setStatus("Reload requires server mode (python serve.py)","warn");};
+document.getElementById("scanBtn").onclick=serverScan;
+document.getElementById("rootInput").addEventListener("keydown",e=>{if(e.key==="Enter")serverScan();});
+if(SERVER){document.getElementById("pickFiles").style.display="none";
+  document.getElementById("pickFolder").textContent="📁 Choose root folder";
+  document.getElementById("rootInput").style.display="";document.getElementById("scanBtn").style.display="";
+  setStatus("Choose your project root folder to begin","none");}
+async function startVideoConvert(){
+  const path=S.videoSrcPath||serverPathOf(S.videoURL);
+  if(!SERVER||!path||S.converting)return;
+  S.converting=true;updateTranscodeBtn();
+  const v=document.getElementById("video"),box=document.getElementById("vidConv"),fill=document.getElementById("vidConvFill"),txt=document.getElementById("vidConvTxt");
+  document.getElementById("videoHint").style.display="none";v.style.display="none";
+  box.style.display="";fill.style.width="0%";txt.textContent="Converting video to H.264 for the browser…";
+  try{const j=await (await fetch("/api/video_convert",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path})})).json();
+    if(j.error||!j.job){txt.innerHTML=`<b style="color:#ffbf5b">${j.error||"could not start conversion"}</b>`;S.converting=false;updateTranscodeBtn();return;}
+    for(;;){await sleep(500);let p;try{p=await (await fetch("/api/progress?job="+j.job)).json();}catch(e){continue;}
+      if(p.total>0){const pct=Math.min(100,p.done/p.total*100);fill.style.width=pct.toFixed(0)+"%";txt.textContent=`Converting to H.264 · ${pct.toFixed(0)}%`;}
+      if(p.status==="done"){fill.style.width="100%";S.videoURL=p.url;S.videoPlayable=true;S.videoSrcPath=null;
+        v.src=p.url;v.load&&v.load();v.style.display="block";document.getElementById("noVideo").style.display="none";
+        setTimeout(()=>{box.style.display="none";},700);break;}
+      if(p.status==="error"||p.status==="unknown"){txt.innerHTML=`<b style="color:#ffbf5b">${p.error||"conversion failed"}</b>`;break;}
+    }
+  }catch(e){txt.textContent="conversion failed: "+e;}
+  S.converting=false;updateTranscodeBtn();}
+(function(){const v=document.getElementById("video");
+  // no auto-convert — just show the hint so the user knows to click Convert
+  v.addEventListener("error",()=>{if(S.videoURL)document.getElementById("videoHint").style.display="";});})();
+document.getElementById("transcodeBtn").onclick=()=>startVideoConvert();
+document.getElementById("loadDemo").onclick=loadDemo;
+document.getElementById("playBtn").onclick=()=>S.playing?stop():play();
+document.getElementById("timeSlider").oninput=e=>{stop();setTime(parseFloat(e.target.value),true);};
+document.getElementById("predSelect").onchange=e=>{S.curModel=e.target.value;renderPred();};
+document.getElementById("evalSelect").onchange=renderEval;
+document.getElementById("compareAll").onchange=renderEval;
+document.getElementById("normSig").onchange=renderSignals;
+document.getElementById("showErrVec").onchange=drawSkel;
+document.querySelectorAll("#sigSourceSeg button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#sigSourceSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");renderSignals();});
+document.querySelectorAll("#viewSeg button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");S.view=b.dataset.v;renderPred();});
+video.addEventListener("seeked",()=>{if(!S.playing){S.t=video.currentTime;drawSkel();renderSignals();updateTimeLabel();}});
+(function(){const cv=document.getElementById("skel");let dr=false,px,py;cv.addEventListener("mousedown",e=>{dr=true;px=e.clientX;py=e.clientY;});addEventListener("mouseup",()=>dr=false);addEventListener("mousemove",e=>{if(!dr)return;S.cam.az+=(e.clientX-px)*.01;S.cam.el=Math.max(-1.3,Math.min(1.3,S.cam.el+(e.clientY-py)*.01));px=e.clientX;py=e.clientY;drawSkel();});})();
+attachHover("sigOverlay",(x)=>`<b>t = ${x.toFixed(2)} s</b>`);
+attachHover("errTime",(x,st)=>{const i=Math.max(0,Math.min(st.series[0].x.length-1,Math.round((x-st.series[0].x[0])/((st.series[0].x[1]-st.series[0].x[0])||1))));return `t = ${x.toFixed(2)} s<br>MPJPE ≈ ${st.series[0].y[i]?.toFixed(0)} mm`;});
+addEventListener("resize",renderAll);
+
+// ---------- demo ----------
+function loadDemo(){const T=220,fps=30,time=new Float64Array(T),J=new Float32Array(T*33*3),R=demoRest();for(let i=0;i<T;i++)time[i]=i/fps;
+  for(let f=0;f<T;f++){const phi=2*Math.PI*.9*f/fps;for(let j=0;j<33;j++){let x=R[j][0],y=R[j][1],z=R[j][2];const lg=[25,27,29,31].includes(j),lr=[26,28,30,32].includes(j),al=[13,15,17,19,21].includes(j),ar=[14,16,18,20,22].includes(j);if(lg)z+=.2*Math.sin(phi);if(lr)z+=.2*Math.sin(phi+Math.PI);if(al)z+=.14*Math.sin(phi+Math.PI);if(ar)z+=.14*Math.sin(phi);y+=.015*Math.sin(2*phi);x+=.02*Math.sin(phi);J[(f*33+j)*3]=x+(Math.random()-.5)*.004;J[(f*33+j)*3+1]=y;J[(f*33+j)*3+2]=z;}}
+  S.gt={time,J,T};S.sensors={};const map={"Left Wrist":15,"Right Wrist":16,"Left Ankle":27,"Right Ankle":28};
+  for(const s in map){const idx=map[s],t=new Float64Array(T),ax=new Float32Array(T),ay=new Float32Array(T),az=new Float32Array(T),gx=new Float32Array(T),gy=new Float32Array(T),gz=new Float32Array(T);
+    for(let f=0;f<T;f++){t[f]=f/fps;const c=Math.max(1,Math.min(T-2,f));
+      for(let a=0;a<3;a++){const acc=(J[((c+1)*33+idx)*3+a]-2*J[(c*33+idx)*3+a]+J[((c-1)*33+idx)*3+a])*fps*fps;[ax,ay,az][a][f]=acc+(a===1?-9.81:0);}
+      gx[f]=Math.sin(f/fps*6);gy[f]=Math.cos(f/fps*6);gz[f]=Math.sin(f/fps*4);}
+    [ax,ay,az].forEach(arr=>smoothArr(arr,5));   // double differentiation amplifies noise
+    S.sensors[s]={t,ax,ay,az,gx,gy,gz};}
+  S.models={transformer:noisy(J,T,.85),lstm:noisy(J,T,1.5)};S.videoURL=null;S.ckpts=0;S.subjects=[];document.getElementById("subjectSel").style.display="none";
+  afterLoad();setStatus("Demo loaded · synthetic gait · 2 models · no video","ok");}
+function noisy(J,T,sc){const P=new Float32Array(T*33*3),sig=new Float32Array(33).fill(.04*sc);[15,16,21,22,19,20,17,18].forEach(j=>sig[j]=.075*sc);[27,28,31,32,29,30].forEach(j=>sig[j]=.06*sc);for(let j=0;j<33;j++)for(let a=0;a<3;a++){let pr=0;for(let f=0;f<T;f++){const n=(Math.random()-.5)*sig[j];pr=pr*.7+n*.3;P[(f*33+j)*3+a]=J[(f*33+j)*3+a]+pr;}}return{time:S.gt.time,J:P,T};}
+function demoRest(){const R={0:[0,.72,.03],1:[-.03,.75,.03],2:[-.04,.75,.03],3:[-.05,.75,.03],4:[.03,.75,.03],5:[.04,.75,.03],6:[.05,.75,.03],7:[-.08,.73,0],8:[.08,.73,0],9:[-.03,.67,.04],10:[.03,.67,.04],11:[-.18,.5,0],12:[.18,.5,0],13:[-.22,.27,0],14:[.22,.27,0],15:[-.24,.05,0],16:[.24,.05,0],17:[-.25,-.01,.01],18:[.25,-.01,.01],19:[-.26,0,.02],20:[.26,0,.02],21:[-.23,.02,.02],22:[.23,.02,.02],23:[-.1,0,0],24:[.1,0,0],25:[-.11,-.45,0],26:[.11,-.45,0],27:[-.11,-.87,0],28:[.11,-.87,0],29:[-.11,-.92,-.06],30:[.11,-.92,-.06],31:[-.11,-.9,.13],32:[.11,-.9,.13]};const a=[];for(let j=0;j<33;j++)a.push(R[j]||[0,0,0]);a.forEach(p=>p[1]=-p[1]);return a;}
+renderAll();
+</script>
+</body>
+</html>

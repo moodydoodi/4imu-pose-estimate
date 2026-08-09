@@ -1,0 +1,7 @@
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+
+# Training and inference only. The preprocessing, synthesis and evaluation
+# scripts run without it.
+torch>=2.0

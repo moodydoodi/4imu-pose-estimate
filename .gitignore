@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data and derived artefacts are not versioned.
+data/raw/
+data/processed/
+cache/
+models/
+logs/
+synthdata/input/
+synthdata/output/
+*.pt
+*.npz
+!data/sample/**/*.npz
+
+# Keep the small evaluation outputs under results/.
