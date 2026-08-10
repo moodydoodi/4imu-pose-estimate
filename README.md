@@ -106,11 +106,7 @@ Per-joint errors, all checks and the full tables are in
 
 Python 3.10+ (developed on 3.11). `numpy`, `pandas`, `scipy` for preprocessing,
 features and evaluation; `torch ≥ 2.0` for training and inference only;
-<<<<<<< HEAD
-`matplotlib` and `reportlab` optionally for the synthesis plots and the PDF report.
-=======
 `matplotlib` optionally for the synthesis plots.
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
@@ -162,14 +158,8 @@ parameterisation reproduces the pose), `|g|` must be 1.000, and `ankle/wrist`
 
 </details>
 
-<<<<<<< HEAD
-> ⚠ `--skeleton-in` *reads* a skeleton file, `--skeleton` *derives and writes* a new
-> one. `prepare.py` refuses to overwrite an existing skeleton without `--force`, so a
-> repeated run cannot silently change the reference all reported numbers rest on.
-=======
 > ⚠ Use `--skeleton-in` to *reuse* a skeleton file. `--skeleton` **writes** a new one
 > and will overwrite the version-controlled `config/*.json`.
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 
 ---
 
@@ -180,11 +170,6 @@ Needs the full dataset under `data/processed/` (not redistributable, see
 
 ```bash
 # 1  features and canonical skeleton
-<<<<<<< HEAD
-#    add --force to rebuild config/skeleton.json — only do that when the set of
-#    recordings changed, it moves the reference every reported number rests on
-=======
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 python src/poser/prepare.py --data data/processed --exclude video7 --suffix _segment \
     --frame body --cache cache/real_body --skeleton config/skeleton.json
 python src/poser/prepare.py --data synthdata/output/recordings --suffix _segment \
@@ -216,14 +201,7 @@ python src/poser/compare_metrics_to_pdf.py \
     --out results/ft_vs_real.pdf
 ```
 
-<<<<<<< HEAD
-Repeat steps 3–4 with `--seed 1` and `--seed 2` for the 18 pairs behind the
-intervals. Step 6 pairs runs by (seed, LORO test recording) — it refuses to
-compare runs that do not pair up cleanly — and writes `.csv`, `.json` and `.pdf`.
-This is what produced the files in `results/`.
-=======
 Repeat steps 3–4 with `--seed 1` and `--seed 2` for the 18 pairs behind the intervals.
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 
 Each run writes `best_<video>.pt` per fold, `model_card.json` (suffix, frame, fps,
 seed, source cache), `pred_<video>.npz` (predicted and true pose per frame) and
@@ -234,11 +212,6 @@ seed, source cache), `pred_<video>.npz` (predicted and true pose per frame) and
 <summary><b>Generating the synthetic data</b></summary>
 
 Needs the AMASS sequences and an SMPL-H body model, neither redistributable.
-<<<<<<< HEAD
-Expected under `synthdata/input/{amass_raw,body_models}`; output goes to
-`synthdata/output/`.
-=======
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 
 ```bash
 python src/synth/check_setup.py      # reports what is missing and where it is expected
@@ -248,24 +221,6 @@ python src/synth/run_pipeline.py --sample 600 --max-seconds 60 --foot-impacts
 Four steps: measure the AX6 noise profile from the real recordings → convert AMASS
 to the pose format → generate virtual AX6 signals → compare against a real recording.
 
-<<<<<<< HEAD
-For a *reproducible* selection of AMASS sequences (rather than a random sample),
-build a manifest first and hand it to the pipeline — this is how the reported
-120- and 800-recording sets were produced:
-
-```bash
-python src/synth/build_amass_manifest.py --amass synthdata/input/amass_raw \
-    --index synthdata/output/amass_index.json \
-    --selection synthdata/output/manifest.json --count 800
-python src/synth/run_pipeline.py --selection synthdata/output/manifest.json --foot-impacts
-```
-
-`src/synth/mount_calib.py` measures how a band sat on a limb (bone axis and
-flexion axis, from rest phases and the hinge behaviour of elbow and knee) and
-feeds `synth_imu.py --mount`, so the virtual sensors sit the way the real ones did.
-
-=======
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 </details>
 
 ---
@@ -278,22 +233,11 @@ src/poser/          model, features, training, evaluation
     prepare.py      → cache/*.npz (features + targets, no torch needed)
     train.py        training, LORO evaluation, metrics, --dry-run self-check
     selftest.py  checklag.py  floor.py   data checks and reference values
-<<<<<<< HEAD
-    compare.py      quick paired look at two runs
-    compare_metrics_to_pdf.py   the reported statistic: paired over all seeds,
-                    bootstrap 95 % intervals, writes csv + json + pdf
-    infer.py  npz_to_dashboard.py
-src/preprocess/     sensor-to-segment calibration (estimate_mount, to_segment)
-src/synth/          synthetic data from AMASS (check_setup, run_pipeline,
-                    build_amass_manifest, sensor_noise_profile, amass_to_pose,
-                    retarget, mounting, mount_calib, synth_imu, validate_*)
-=======
     infer.py  compare.py  npz_to_dashboard.py
 src/preprocess/     sensor-to-segment calibration (estimate_mount, to_segment)
 src/synth/          synthetic data from AMASS (check_setup, run_pipeline,
                     sensor_noise_profile, amass_to_pose, retarget, mounting,
                     synth_imu, validate_*)
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 dashboard/          local web dashboard for inspecting predictions
 config/             canonical skeleton (full dataset + bundled sample)
 data/sample/        90 s excerpt of one recording so the pipeline can be run
@@ -417,14 +361,6 @@ Together with `--max-recordings` this separates the *amount* of pre-training fro
 
 Listed openly so reviewers do not have to find them:
 
-<<<<<<< HEAD
-- **The dataset is still growing.** More recordings are being captured, so every
-  number in this README is expected to move. The evaluation protocol and the
-  scripts that produce the numbers will not.
-- **The two explanations for the decaying pre-training benefit are confounded.**
-  `--scramble-targets` and `--max-recordings` are implemented and would separate
-  "better initialisation" from "transferred knowledge", but have not been run.
-=======
 - The aggregation script that produced the bootstrap intervals in `results/*.json` is
   **not in this repository**. `src/poser/compare.py` does a paired sign test and a
   *t*-statistic, not the bootstrap. The per-fold inputs (`results/*.csv`) are included,
@@ -434,16 +370,11 @@ Listed openly so reviewers do not have to find them:
   `--selection` the pipeline runs on all available AMASS sequences.
 - `src/synth/common.py` resolves its input and output directories relative to
   `src/synth/`, not to the repository root; the commands above assume the root.
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 - Parts of `dashboard/inference.py` are a generic loader for a second, differently
   architected model developed in parallel; those code paths are incomplete.
 - `config/skeleton.json` still carries German joint names while
   `config/skeleton_sample.json` and `src/poser/config.py` use English ones. Only
   `parents` and the bone lengths are read, so this is cosmetic.
-<<<<<<< HEAD
-- Some help texts and inline comments in `src/synth/` are still German.
-=======
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 
 ---
 
@@ -459,14 +390,6 @@ Listed openly so reviewers do not have to find them:
 `src/synth/check_setup.py` reports which external assets are missing and where they
 are expected.
 
-<<<<<<< HEAD
-**Licence.** The code and documentation in this repository are MIT licensed (see
-[`LICENSE`](LICENSE)). AMASS, the SMPL-H body model and the full video recordings
-are *not* covered by it and are not redistributed here; `LICENSE` states the scope
-in detail.
-
-=======
->>>>>>> 69cb31cac816bb516f7f5dfd6b6f81a6e8ae0d9f
 **References.** Mahmood et al., *AMASS*, ICCV 2019 · Huang et al., *Deep Inertial
 Poser*, SIGGRAPH Asia 2018 · Yi et al., *TransPose*, SIGGRAPH 2021 (leaf-to-full
 staging) · Yi et al., *Physical Inertial Poser*, CVPR 2022 · Mollyn et al.,
