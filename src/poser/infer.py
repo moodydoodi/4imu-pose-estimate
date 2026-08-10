@@ -1,12 +1,5 @@
-"""Apply a trained model to a recording and write dashboard-readable output.
-
-The dashboard has its own model class built in and cannot load these weights.
-Rather than copying the model class into it, the model writes its prediction as
-CSV and the dashboard only reads CSV, which decouples the display from the
-architecture.
-
-Layer widths, feature count and bone lengths are read from the checkpoint
-itself, so nothing has to be configured by hand.
+"""Apply a checkpoint to a recording and write dashboard CSV.
+Architecture and bone lengths are read from the checkpoint.
 
     python infer.py --checkpoint models/finetune/best_video1.pt \
         --cache cache/real_body --name poser --out models/finetune
@@ -93,8 +86,7 @@ def procrustes(P, Y):
 
 
 def write_outputs(out_dir, name, t, P, Y=None):
-    """Write predictions__<name>.csv, its topology sidecar and
-    metrics__<name>.json in the layout the dashboard expects."""
+    """Write predictions__<name>.csv, its topology sidecar and metrics__<name>.json."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 

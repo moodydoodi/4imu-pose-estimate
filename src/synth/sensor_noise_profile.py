@@ -1,10 +1,8 @@
-"""Measure a noise profile from real AX6 recordings.
+"""Noise profile from real AX6 recordings.
 
-Finds quiet blocks in each recording and measures, per sensor and axis: noise
-standard deviation, AR(1) coefficient, bias instability, gyro offset,
-quantisation step and the accelerometer scale error relative to 9.81 m/s2. One
-profile per recording is stored so the synthesis can draw a different device
-behaviour for each generated recording.
+Per sensor and axis, measured on quiet blocks: noise std, AR(1) coefficient,
+bias instability, gyro offset, quantisation step and accelerometer scale error.
+One profile per recording.
 """
 import argparse
 import json
@@ -36,7 +34,7 @@ def sample_rate(t: np.ndarray) -> float:
 
 
 def quantisation_step(x: np.ndarray, limit: int = 300_000) -> float:
-    """Kleinster Abstand zwischen zwei tatsaechlich vorkommenden Werten."""
+    """-> smallest step between two values that actually occur."""
     u = np.unique(np.round(x[:limit].astype(float), 9))
     if u.size < 3:
         return 0.0
@@ -138,7 +136,7 @@ def profile_recording(subj: Path, suffix: str, block_seconds: float,
     out = {"source_subject": str(subj), "suffix": suffix,
            "gravity_reference_ms2": G_REF, "sensors": {}}
     if verbose:
-        print(f"\nAufnahme: {subj}")
+        print(f"\nrecording: {subj}")
         print(f"{'sensor':14s} {'fs':>6s} {'|g| rest':>9s} {'scale':>7s} "
               f"{'acc noise':>13s} {'gyr noise':>13s}")
     for s in SENSORS:
@@ -155,7 +153,7 @@ def profile_recording(subj: Path, suffix: str, block_seconds: float,
                   f"{np.mean(prof['acc']['noise_std']):13.4f} "
                   f"{np.mean(prof['gyr']['noise_std']):13.4f}")
     if not out["sensors"]:
-        raise ValueError("Keine Sensordateien gefunden.")
+        raise ValueError("No sensor files found.")
     scales = [v["acc_scale_vs_9_81"] for v in out["sensors"].values()]
     out["aggregate"] = {
         "fs_hz": float(np.median([v["fs_hz"] for v in out["sensors"].values()])),
@@ -182,7 +180,8 @@ def main():
                      help="several real recordings: builds a profile bank, one entry drawn per synthetic clips davon")
     ap.add_argument("--suffix", default="_aligned",
                     help="_aligned (Standard) oder _mp_spatial")
-    ap.add_argument("--out", default=None, help="Ziel-JSON (Standard: config/ax6_noise_profile.json)")
+    ap.add_argument("--out", default=None,
+                    help="output JSON (default: config/ax6_noise_profile.json)")
     ap.add_argument("--block-seconds", type=float, default=1.0)
     ap.add_argument("--quiet-fraction", type=float, default=0.05,
                     help="fraction of the quietest blocks treated as rest")
@@ -203,13 +202,13 @@ def main():
     dest = Path(args.out) if args.out else Path("config/ax6_noise_profile.json")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(out, indent=2), encoding="utf-8")
-    print(f"\nProfil geschrieben: {dest}")
+    print(f"\nprofile written: {dest}")
 
     if len(profiles) == 1:
         spread = (out["aggregate"]["acc_scale_max"] - out["aggregate"]["acc_scale_min"]) * 100
         if spread > 2.0:
-            print(f"Hinweis: die Sensoren unterscheiden sich in der Skalierung um {spread:.1f} %. "
-                  f"Eine Kalibrierung wuerde diesen systematischen Fehler entfernen.")
+            print(f"note: sensor scale factors differ by {spread:.1f} %. "
+                  f"A calibration would remove this systematic error.")
 
 
 if __name__ == "__main__":

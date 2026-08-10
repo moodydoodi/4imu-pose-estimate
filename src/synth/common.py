@@ -1,18 +1,22 @@
-"""Shared helpers for check_setup.py and run_pipeline.py."""
+"""Paths and helpers for check_setup.py and run_pipeline.py, relative to the
+repository root."""
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-PROJECT = HERE.parent                       # TechnicalColl
+HERE = Path(__file__).resolve().parent      # src/synth
+PROJECT = HERE.parents[1]                   # repository root
 
-IN_DIR = HERE / "input"
+SYNTH_DIR = PROJECT / "synthdata"
+IN_DIR = SYNTH_DIR / "input"
 AMASS_DIR = IN_DIR / "amass_raw"
 MODEL_DIR = IN_DIR / "body_models"
 
-OUT_DIR = HERE / "output"
+OUT_DIR = SYNTH_DIR / "output"
 PROFILE = OUT_DIR / "ax6_noise_profile.json"
 POSE_DIR = OUT_DIR / "poses"
 REC_DIR = OUT_DIR / "recordings"
 REPORT_DIR = OUT_DIR / "reports"
+
+REQUIREMENTS = PROJECT / "requirements.txt"
 
 SENSORS = ["left_wrist", "right_wrist", "left_ankle", "right_ankle"]
 
@@ -23,12 +27,15 @@ def ensure_dirs():
 
 
 def is_recording(p: Path) -> bool:
+    """A recording folder holds the four aligned sensor files."""
     return p.is_dir() and all((p / f"{s}_aligned.csv").exists() for s in SENSORS)
 
 
 def find_recordings(root: Path = PROJECT):
+    """-> real recording folders found under data/."""
     seen, out = set(), []
-    candidates = [root, root / "data" / "processed", root / "data"]
+    candidates = [root / "data" / "processed", root / "data" / "raw",
+                  root / "data" / "sample", root / "data", root]
     for base in candidates:
         if not base.is_dir():
             continue
@@ -51,15 +58,22 @@ def body_model_files(folder: Path = MODEL_DIR):
     return sorted(folder.rglob("*.npz")) if folder.is_dir() else []
 
 
+# Checked by check_setup.py. Optional means the pipeline still runs without it.
+PACKAGES = [
+    ("numpy", "everything", False),
+    ("pandas", "everything", False),
+    ("scipy", "feature filters", True),
+    ("matplotlib", "comparison plots", True),
+]
+
+
 def check_packages():
-    """-> Liste (Name, vorhanden, Version, benoetigt_fuer)"""
-    wanted = [("numpy", "alles"), ("pandas", "alles"),
-              ("matplotlib", "plots"), ("scipy", "filters (optional)")]
+    """-> list of (name, installed, version, needed_for, optional)."""
     rows = []
-    for name, why in wanted:
+    for name, why, optional in PACKAGES:
         try:
             m = __import__(name)
-            rows.append((name, True, getattr(m, "__version__", "?"), why))
+            rows.append((name, True, getattr(m, "__version__", "?"), why, optional))
         except Exception:
-            rows.append((name, False, "-", why))
+            rows.append((name, False, "-", why, optional))
     return rows

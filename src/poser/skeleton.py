@@ -1,15 +1,4 @@
-"""13-joint skeleton, bone lengths and forward kinematics.
-
-With fixed bone lengths a pelvis-centred pose is fully determined by the twelve
-bone directions, so the network outputs twelve unit vectors and positions follow
-from a prefix sum along the chain:
-
-    p[i] = p[parent] + L[i] * d[i]
-
-Twelve unit vectors carry 24 degrees of freedom, exactly what a pelvis-centred
-13-joint pose with rigid bones has. Bone lengths are therefore correct by
-construction and cannot drift.
-"""
+"""13-joint skeleton, bone lengths and forward kinematics."""
 import json
 from pathlib import Path
 
@@ -20,7 +9,7 @@ from config import PARENTS, N_JOINTS, N_BONES, MP_INDEX, JOINT_NAMES
 assert all(PARENTS[i] < i for i in range(1, N_JOINTS)), \
     "PARENTS must be topologically sorted for the prefix sum to be valid."
 
-UP = np.array([0.0, -1.0, 0.0])   # MediaPipe world coordinates: y points down
+UP = np.array([0.0, -1.0, 0.0])   # MediaPipe world frame: +y is down
 
 
 def mp33_to_13(P33):
@@ -62,10 +51,7 @@ def forward(D, L):
 
 
 def canonical_from_recordings(rec_poses, robust=True):
-    """Median bone lengths per recording plus the median across recordings.
-
-    Median rather than mean: MediaPipe produces occasional depth outliers.
-    """
+    """-> canonical bone lengths (12,) and per-recording lengths {name: (12,)}."""
     per = {}
     for k, P in rec_poses.items():
         _, L = bone_dirs_and_lengths(P)
@@ -96,23 +82,13 @@ def load_skeleton(path):
 
 
 def canonicalize(P13, L_target):
-    """Rebuild the pose with target bone lengths, keeping joint directions.
-
-    This removes body size from the learning problem.
-    """
+    """(T,13,3) -> same pose rebuilt with bone lengths L_target."""
     D, _ = bone_dirs_and_lengths(P13)
     return forward(D, L_target)
 
 
 def body_frame(P13):
-    """Rotate every pose so the hip axis points along +x in the horizontal plane.
-
-    This removes rotation about the vertical from the targets. Four limb sensors
-    without a magnetometer cannot observe that degree of freedom; forward and
-    lateral lean stay intact because gravity does resolve them.
-
-    Returns the rotated pose and the rotation matrices used.
-    """
+    """(T,13,3) -> pose with the hip axis on +x, and the rotations used."""
     P13 = np.asarray(P13, float)
     up = np.broadcast_to(UP, (len(P13), 3))
     h = P13[:, 4] - P13[:, 1]

@@ -1,10 +1,6 @@
 """Time offset between sensor and pose, per sensor.
-
-Two independent signals are correlated against the pose and the peak correlation
-is reported alongside the lag. Without it there is no way to tell a real offset
-from a spurious maximum: what must coincide at touchdown is the impact-band
-energy and the magnitude of linear acceleration on the sensor side, and the
-second derivative of the corresponding joint on the pose side.
+Correlates two independent sensor signals against the pose and reports the lag
+with its peak correlation, so a real offset can be told from a side lobe.
 
     python checklag.py --cache cache/real_body
 """
@@ -17,8 +13,7 @@ from config import FEAT_PER_SENSOR, LEAF_JOINTS, SENSORS
 
 
 def xcorr_lag(a, b, fps, max_lag=1.2):
-    """Best k such that a[i] coincides with b[i+k]. Returns seconds, peak
-    correlation and the correlation at zero offset."""
+    """-> (lag in s, peak correlation, correlation at zero lag)."""
     n = min(len(a), len(b))
     a, b = a[:n] - a[:n].mean(), b[:n] - b[:n].mean()
     sa, sb = a.std(), b.std()
@@ -75,11 +70,6 @@ def main():
              else f"all four shifted by {med:+.2f} s - check synchronisation")
         print(f"{'':10s}{'--> overall':13s}{med:+9.2f}{peak:8.2f}{'':8s}   {v}\n")
 
-    print("How to read this: 'peak' is the highest correlation, 'at 0' the one")
-    print("without any shift. Below a peak of 0.12 the search only found noise and")
-    print("the lag says nothing. If all four sensors of a recording are shifted by")
-    print("the same amount, the cause is video-to-sensor synchronisation, not a")
-    print("single band.")
 
 
 if __name__ == "__main__":

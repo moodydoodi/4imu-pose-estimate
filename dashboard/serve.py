@@ -1,15 +1,10 @@
-"""
-serve.py — local launcher for the Movement Analysis Suite web dashboard.
+"""Local launcher for the dashboard. Binds to localhost only.
 
-Run ONCE:  python serve.py
-It opens the dashboard in your browser and adds a small local API so you can
-**run model inference from inside the dashboard** (no CLI switching):
-  • scan a project root for checkpoints + subjects,
-  • load a subject's data straight from disk,
-  • run a checkpoint -> writes predictions__<name>.csv AND shows it live.
+Serves the page and a small API to scan a project root for checkpoints and
+recordings, and to run a checkpoint from inside the dashboard. torch is needed
+only for the inference step.
 
-Only your own machine talks to it (localhost). Requires: torch (only for the
-actual inference step) + the project's inference.py.
+    python serve.py
 """
 import http.server, socketserver, json, os, sys, urllib.parse, importlib.util, webbrowser, threading, mimetypes, argparse, shutil, subprocess, uuid, time, traceback
 from pathlib import Path
@@ -56,7 +51,7 @@ def subject_files(d):
             continue
         n = f.name.lower()
         if n.endswith((".mp4", ".mov")):
-            if n.endswith("__h264.mp4"):        # derived copy — only use if nothing else
+            if n.endswith("__h264.mp4"):        # derived copy, use only as fallback
                 if not res["video"]:
                     res["video"] = str(f)
             else:
@@ -90,7 +85,7 @@ def file_url(p):
 WEB_CODECS = {"h264", "vp8", "vp9", "av1"}
 
 def ffprobe_codec(path):
-    """Video codec of the first video stream (lowercase), or None if ffprobe is missing/fails."""
+    """-> codec of the first video stream, or None if ffprobe is unavailable."""
     if not shutil.which("ffprobe"):
         return None
     try:
@@ -102,16 +97,15 @@ def ffprobe_codec(path):
         return None
 
 def usable_h264(p):
-    """True if a previously converted file exists AND is actually readable.
-    Without ffprobe we can only fall back to a size check."""
+    """True if a converted file exists and is readable."""
     try:
         if not p.exists() or p.stat().st_size < 1024:
             return False
     except OSError:
         return False
     if not shutil.which("ffprobe"):
-        return True                      # cannot verify — assume it is fine
-    return ffprobe_codec(p) in WEB_CODECS # empty/None => unreadable => redo it
+        return True                      # cannot verify, assume it is fine
+    return ffprobe_codec(p) in WEB_CODECS # None means unreadable, so redo it
 
 def ffprobe_duration(path):
     if not shutil.which("ffprobe"):
@@ -124,7 +118,7 @@ def ffprobe_duration(path):
         return 0.0
 
 def run_convert_job(jid, src):
-    """Background H.264 conversion with live progress (parsed from ffmpeg -progress)."""
+    """Background H.264 conversion with progress from ffmpeg -progress."""
     j = JOBS[jid]
     try:
         src = Path(src)
@@ -138,8 +132,7 @@ def run_convert_job(jid, src):
         dur = ffprobe_duration(src)
         j.update(status="running", total=round(dur, 2), done=0, stage="converting to H.264")
         print(f"[convert] start {src.name} ({dur:.0f}s) -> {out.name}")
-        # write to a temp file and rename at the end, so an interrupted run never
-        # leaves a half-written file that looks like a finished conversion
+        # temp file plus rename, so an interrupted run leaves no half-written file
         tmp = out.with_name(out.stem + ".part.mp4")
         proc = subprocess.Popen(["ffmpeg", "-y", "-i", str(src), "-c:v", "libx264", "-preset", "veryfast",
                                  "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart",
@@ -159,7 +152,7 @@ def run_convert_job(jid, src):
             try: tmp.unlink()
             except OSError: pass
             j.update(status="error", error="ffmpeg failed: " + err); return
-        os.replace(str(tmp), str(out))             # atomic: only now does out exist
+        os.replace(str(tmp), str(out))             # atomic
         print(f"[convert] done -> {out}")
         j.update(status="done", url=file_url(out))
     except Exception as e:
@@ -168,7 +161,7 @@ def run_convert_job(jid, src):
 
 
 def run_infer_job(jid, body):
-    """Background worker: runs one checkpoint and streams progress into JOBS[jid]."""
+    """Run one checkpoint, streaming progress into JOBS[jid]."""
     j = JOBS[jid]
     try:
         ck = body["checkpoint"]; spec = INF.ModelSpec(ck)
@@ -233,14 +226,13 @@ class H(http.server.BaseHTTPRequestHandler):
             if sf["video"]:
                 orig = Path(sf["video"])
                 h264 = orig.with_name(orig.stem + "__h264.mp4")
-                # only trust a previous conversion if it is actually readable (an
-                # interrupted run can leave a truncated file behind)
+                # only trust a previous conversion if it is readable
                 if usable_h264(h264):
                     v_url = file_url(h264); v_play = True; v_src = str(orig)
                 else:
                     if h264.exists():
                         print(f"[video] ignoring unreadable {h264.name} — using the original")
-                    codec = ffprobe_codec(orig)         # None if ffprobe missing
+                    codec = ffprobe_codec(orig)         # None without ffprobe
                     v_play = (codec in WEB_CODECS) if codec else None
                     v_url = file_url(orig); v_src = str(orig)
             return self._json({

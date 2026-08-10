@@ -100,10 +100,71 @@ The one serious defect is the impact band at the wrists:
 | left_ankle | 0.1354 | 0.1155 | 0.85 | 0.09 | 0.10 |
 | right_ankle | 0.1401 | 0.1322 | 0.94 | 0.09 | 0.10 |
 
-At the ankles the channel is correct once foot impacts are enabled. At the
-wrists real recordings carry almost no energy in that band, so a factor of ten
-cannot be motion content: the pose is smoothed at 25 Hz and then differentiated
-twice, and double differentiation amplifies high frequencies quadratically.
+**This was diagnosed as a resampling image, not as generic differentiation
+noise, and has since been fixed. The table above describes the released
+800-recording set, which is contaminated.**
+
+The explanation originally given here — "the pose is smoothed at 25 Hz, then
+differentiated twice, and double differentiation amplifies high frequencies
+quadratically" — is the right mechanism but the wrong cause, and it led to the
+wrong conclusion that only the wrists were affected. What actually happened:
+
+**A discrete tone at 79.98 Hz.** The AMASS pose runs at 120 Hz, the AX6 grid at
+200 Hz. `resample_uniform` (linear) and `resample_rotations` (slerp) are not
+band-limited: every source frame leaves a kink, and on the target grid those
+kinks appear as an image of the source rate at |200 − 120| = 80 Hz — inside the
+20–90 Hz impact band. Double differentiation multiplies that frequency by
+ω² ≈ 2.5·10⁵, turning a sub-millimetre ripple into several m/s².
+
+Measured as the peak at 80 Hz over the median power in 20–90 Hz:
+
+| | left wrist | right wrist | left ankle | right ankle |
+|---|---:|---:|---:|---:|
+| real recordings | 1.6 | 1.4 | 0.6 | 0.7 |
+| released 800-set | **77.8** | **87.0** | 5.3 | 8.3 |
+| after the fix | 0.3 | 1.2 | 0.6 | 0.9 |
+
+Three corrections to the earlier reading:
+
+1. **The ankles were never "correct".** The synthesis produced roughly the same
+   0.17–0.23 impact-band level on all four sensors regardless of the limb. At
+   the ankles that happened to land near the real value (~0.10), which hid the
+   defect; the wrists, where real recordings carry almost nothing, exposed it.
+2. **`degrade()` is not involved.** Adding axis-scale error, bias drift,
+   coloured noise, quantisation and clipping one at a time leaves the 80 Hz peak
+   unchanged (1.27·10⁻² → 1.48·10⁻²). The artefact is in the clean geometric
+   acceleration.
+3. **The 25 Hz smoothing default was calibrated against the corrupted signal.**
+   The justification ("about a fifth of the real signal power sits in 12–25 Hz")
+   counted the image and its surroundings as real signal.
+
+**The fix**, in `src/synth/synth_imu.py`:
+
+- the segment rotations get the same low pass as the positions. Previously they
+  bypassed it entirely and entered the sensor position through the lever arm
+  `R @ SENSOR_OFFSET` and the angular rate through `so3_log`;
+- the cutoff is capped at 0.4 × source rate;
+- the motion-capture default drops from 25 Hz to 14 Hz, re-measured after the
+  fix over four AMASS sequences against the real recordings;
+- a guard computes the image-tone ratio per sensor, writes it to
+  `synthesis_info.json` and warns above 3×. It rejects the released 800-set and
+  passes both the real recordings and the corrected output.
+
+Impact-band energy relative to real after the fix (median over four sequences):
+
+| smoothing | wrists | ankles |
+|---|---:|---:|
+| 25 Hz (old default) | 5.7 – 7.9× | 1.8 – 2.2× |
+| 14 Hz (new default) | 1.3 – 1.6× | 0.6 – 0.8× |
+
+`--foot-impacts` still only affects the ankles (0.061 → 0.067 and 0.065 → 0.080),
+so there is no double counting.
+
+**Consequence for the reported numbers.** Every result in this document was
+obtained on synthetic data carrying an 80 Hz carrier on all four sensors. The
+pre-training effect may be larger, smaller or absent once the set is
+regenerated. The 20–90 Hz channel is one of twelve per sensor, so a total
+collapse is unlikely, but the numbers are not final.
 
 Second largest deviation is the gravity direction at the ankles (grav_z at 0.81
 and 0.90 against 0.13 to 0.34 between real recordings). That is a genuine

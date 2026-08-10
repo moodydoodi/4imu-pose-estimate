@@ -1,11 +1,8 @@
-"""Cost of forcing every subject onto one shared skeleton.
+"""MPJPE cost of forcing every subject onto one shared skeleton.
+Measured against the raw MediaPipe pose, not the cache, where it would be zero
+by construction.
 
-This cannot be measured from the cache, because prepare.py already stores poses
-on the canonical skeleton, so the answer there is zero by construction. Measured
-here against the raw MediaPipe pose: true joint directions, canonical bone
-lengths.
-
-    python floor.py --data data/processed --skeleton config/skeleton.json --exclude video7
+    python floor.py --data data/processed --skeleton config/skeleton.json
 """
 import argparse
 from pathlib import Path

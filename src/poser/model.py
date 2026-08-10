@@ -1,20 +1,4 @@
-"""Network and loss.
-
-Temporal convolution stem, bidirectional LSTM, two output stages (first the four
-limb ends, then all twelve bones), forward kinematics turning directions into
-positions.
-
-Design notes:
-  * The output is twelve unit vectors rather than 6D rotations or free
-    positions. With fixed bone lengths that parameterisation is exact and bone
-    lengths cannot become invalid.
-  * Two stages. The four bones carrying a sensor are the most directly observed;
-    they get their own intermediate output and loss term, and the second stage
-    may use them (leaf-to-full, as in TransPose).
-  * BiLSTM rather than a transformer or ST-GCN. With about one hour of real data
-    model capacity is not the bottleneck. Bidirectional means offline only,
-    which suits the evaluation setting.
-"""
+"""Network and loss: TCN stem, BiLSTM, two bone-direction stages, FK."""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -38,7 +22,7 @@ def fk(dirs, lengths):
 
 
 class TemporalStem(nn.Module):
-    """Dilations cover about 0.4 s, the duration of a landing."""
+    """Dilated temporal convolutions, receptive field about 0.4 s."""
 
     def __init__(self, cin, cout, dropout=0.1):
         super().__init__()
@@ -81,10 +65,7 @@ class Poser(nn.Module):
         h2, _ = self.rnn2(torch.cat([h, leaf_n.reshape(B, T, -1)], dim=-1))
         dirs = F.normalize(self.head_full(h2).view(B, T, N_BONES, 3), dim=-1, eps=1e-8)
 
-        # Same kinematics with only the four leaf bones replaced by stage one, so
-        # its loss term is measurable in mm. The other bones are detached so this
-        # term trains stage one alone. Built with stack rather than in-place
-        # assignment to keep autograd happy.
+        # Stage-1 pose: leaf bones from stage 1, the rest detached.
         leaf_map = {b - 1: k for k, b in enumerate(LEAF_BONES)}
         dirs_leaf = torch.stack(
             [leaf_n[:, :, leaf_map[i]] if i in leaf_map else dirs[:, :, i].detach()
@@ -95,7 +76,7 @@ class Poser(nn.Module):
 
 
 class PoseLoss(nn.Module):
-    """Position, direction, velocity and the intermediate stage."""
+    """Huber on position and velocity, cosine on direction, plus stage 1."""
 
     def __init__(self, w_dir=0.5, w_vel=1.0, w_leaf=0.5, huber=0.05):
         super().__init__()

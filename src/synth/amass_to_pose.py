@@ -1,16 +1,12 @@
-"""Convert AMASS sequences into the 33-joint pose format used here.
-
-Reads the SMPL-H parameters, computes joint positions with smpl_joints.py,
-maps them onto the MediaPipe joint layout, scales the skeleton to the real
-recordings (retarget.py) and stores joints, root translation, per-joint
-rotations and the frame rate.
-"""
+"""AMASS SMPL-H sequences -> 33-joint MediaPipe pose format.
+Stores joints, root translation, segment rotations and the frame rate."""
 import argparse
 import json
 from pathlib import Path
 
 import numpy as np
 
+import synth_imu                      # for the shared zero-phase low pass
 from smpl_joints import BodyModel, find_model
 
 SMPL_TO_MP = {1: 23, 2: 24, 4: 25, 5: 26, 7: 27, 8: 28,
@@ -81,10 +77,10 @@ def detect_up_axis(J):
 
 
 def to_mediapipe_frame(J, up):
-    """MediaPipe-Weltkoordinaten: x nach rechts, y nach UNTEN, z nach hinten."""
+    """-> MediaPipe world frame: x right, y down, z back."""
     X, Y, Z = J[..., 0], J[..., 1], J[..., 2]
     if up == 2:
-        return np.stack([X, -Z, Y], axis=-1)       # AMASS-Standard: z oben
+        return np.stack([X, -Z, Y], axis=-1)       # AMASS default: z up
     if up == 1:
         return np.stack([X, -Y, -Z], axis=-1)
     return np.stack([Y, -X, Z], axis=-1)
@@ -107,29 +103,52 @@ def to_mp_layout(J):
     return P
 
 
+def _band_limit(x2d, fps_in, fps_out, out_grid):
+    """Band-limit x2d (T,C) to the lower of the two Nyquist rates.
+
+    Linear interpolation is not band limited. Downsampling without a filter
+    aliases; upsampling leaves an image of the source rate at every multiple of
+    fps_in, which the double differentiation in synth_imu lifts by omega^2 into
+    the impact band. Filter on whichever grid is the finer one.
+    """
+    cut = 0.45 * min(fps_in, fps_out)
+    fs = fps_out if out_grid else fps_in
+    if cut >= 0.5 * fs:
+        return x2d
+    return synth_imu.lowpass(x2d, fs, cut)
+
+
 def resample(P, fps_in, fps_out):
+    """-> (poses on the fps_out grid, the rate actually used)."""
     if not fps_out or abs(fps_in - fps_out) < 1e-6:
         return P, fps_in
-    t_in = np.arange(len(P)) / fps_in
+    T, J, _ = P.shape
+    flat = P.reshape(T, -1)
+    if fps_out < fps_in:                       # decimation: filter first
+        flat = _band_limit(flat, fps_in, fps_out, out_grid=False)
+    t_in = np.arange(T) / fps_in
     t_out = np.arange(0, t_in[-1], 1.0 / fps_out)
-    out = np.empty((len(t_out), P.shape[1], 3))
-    for j in range(P.shape[1]):
-        for a in range(3):
-            out[:, j, a] = np.interp(t_out, t_in, P[:, j, a])
-    return out, fps_out
+    out = np.stack([np.interp(t_out, t_in, flat[:, c])
+                    for c in range(flat.shape[1])], axis=1)
+    if fps_out > fps_in:                       # upsampling: remove the images
+        out = _band_limit(out, fps_in, fps_out, out_grid=True)
+    return out.reshape(len(t_out), J, 3), fps_out
 
 
 def resample_rot(R, fps_in, fps_out):
     if not fps_out or abs(fps_in - fps_out) < 1e-6:
         return R
+    flat = R.reshape(len(R), -1)
+    if fps_out < fps_in:
+        flat = _band_limit(flat, fps_in, fps_out, out_grid=False)
     t_in = np.arange(len(R)) / fps_in
     t_out = np.arange(0, t_in[-1], 1.0 / fps_out)
-    flat = R.reshape(len(R), -1)
-    out = np.empty((len(t_out), flat.shape[1]))
-    for c in range(flat.shape[1]):
-        out[:, c] = np.interp(t_out, t_in, flat[:, c])
+    out = np.stack([np.interp(t_out, t_in, flat[:, c])
+                    for c in range(flat.shape[1])], axis=1)
+    if fps_out > fps_in:
+        out = _band_limit(out, fps_in, fps_out, out_grid=True)
     M = out.reshape(len(t_out), *R.shape[1:])
-    U, _, Vt = np.linalg.svd(M)
+    U, _, Vt = np.linalg.svd(M)                # back onto SO(3)
     Q = U @ Vt
     d = np.linalg.det(Q)
     Q[d < 0] = (U[d < 0] * np.array([1.0, 1.0, -1.0])) @ Vt[d < 0]
@@ -140,14 +159,14 @@ def convert(J_smpl, fps, fps_out, target_scale, bone_targets=None, seg=None):
     up = detect_up_axis(J_smpl)
     P = to_mp_layout(to_mediapipe_frame(J_smpl, up))
     root = (P[:, 23] + P[:, 24]) / 2.0                       # true pelvis trajectory
-    P = P - root[:, None, :]                                 # hueftzentriert
+    P = P - root[:, None, :]                                 # pelvis-centred
     P, fps_new = resample(P, fps, fps_out)
     root, _ = resample(root[:, None, :], fps, fps_out)
     root = root[:, 0, :]
     if seg is not None:
         seg = axis_matrix(up)[None, None] @ seg
         seg = resample_rot(seg, fps, fps_out)[:len(P)]
-    root = root - root[0]                                    # Startpunkt in den Ursprung
+    root = root - root[0]                                    # start at the origin
     scale = float(np.linalg.norm(P[:, 11] - P[:, 23], axis=1).mean())
 
     if bone_targets:
@@ -168,12 +187,10 @@ def main():
     ap = argparse.ArgumentParser(description="AMASS -> pose sequences")
     ap.add_argument("--amass", required=True, help="AMASS .npz file or directory")
     ap.add_argument("--body-model", required=True, help="directory containing smplh/ or smpl/")
-    ap.add_argument("--out", required=True, help="Zielordner")
+    ap.add_argument("--out", required=True, help="output directory")
     ap.add_argument("--glob", default="*.npz")
     ap.add_argument("--fps", type=float, default=120.0,
-                    help="Bildrate der Ausgabe. AMASS liegt nativ bei 120 Hz; "
-                         "wer hier heruntergeht, verliert Bandbreite, die im "
-                         "otherwise part of the sensor signal is lost.")
+                    help="output frame rate; AMASS is natively 120 Hz")
     ap.add_argument("--target-scale", type=float, default=0.48,
                     help="mean shoulder-to-hip distance in m, taken from the real recordings")
     ap.add_argument("--limit", type=int, default=0, help="only the first N sequences")
@@ -181,7 +198,7 @@ def main():
                     help="pick N sequences spread evenly over all subjects instead of "
                          "the first N, which keeps the selection diverse.")
     ap.add_argument("--selection", default=None,
-                    help="JSON-Manifest aus build_amass_manifest.py; hat Vorrang vor --sample/--limit")
+                    help="manifest from build_amass_manifest.py; overrides --sample/--limit")
     ap.add_argument("--overwrite", action="store_true",
                     help="overwrite existing pose files")
     ap.add_argument("--max-seconds", type=float, default=60.0)
@@ -206,7 +223,7 @@ def main():
                    if p.is_file() and "shape" not in p.name.lower()
                    and p.name != "neutral_stagei.npz")
     if not files:
-        raise SystemExit(f"Keine .npz unter {src}")
+        raise SystemExit(f"No .npz files under {src}")
     selected = None
     if args.selection:
         selected = json.loads(Path(args.selection).read_text(encoding="utf-8")).get("selected", [])
@@ -243,10 +260,12 @@ def main():
             if len(J) / fps < args.min_seconds:
                 skipped.append((f.name, "zu kurz"))
                 continue
-            P, root, seg, fps_out, up, scale, before = convert(
+            # fps_actual is what convert() really used: args.fps, or the source
+            # rate when args.fps is 0 or already equal. It is what gets stored.
+            P, root, seg, fps_actual, up, scale, before = convert(
                 J, fps, args.fps, args.target_scale, bone_targets, seg)
             np.savez_compressed(dest, joints=P, root=root,
-                                seg_rot=seg.astype(np.float32), fps=fps_out,
+                                seg_rot=seg.astype(np.float32), fps=fps_actual,
                                 source=str(f), dataset=entry.get("dataset", ""),
                                 subject=entry.get("subject", ""),
                                 motion_profile=entry.get("motion_profile", ""),

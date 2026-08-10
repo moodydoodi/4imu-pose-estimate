@@ -1,6 +1,4 @@
-"""Mounting geometry: rotations between the anatomical frame of a limb and the
-device frame of the band sitting on it, plus the calibration that maps a device
-frame into the gravity-aligned frame used by the preprocessing."""
+"""Rotations between the anatomical frame of a limb and the device frame."""
 import json
 from pathlib import Path
 
@@ -44,7 +42,7 @@ def mount_matrix(sensor: str, bone_axes: dict, roll_deg: float) -> np.ndarray:
 
 
 def draw_rolls(rng, fixed=None) -> dict:
-    """Zufaellige Verdrehung je Sensor, oder feste Werte, falls bekannt."""
+    """-> roll about the bone axis per sensor, in degrees."""
     if fixed:
         return {s: float(fixed.get(s, 0.0)) for s in SENSOR_ORDER}
     return {s: float(rng.uniform(0.0, 360.0)) for s in SENSOR_ORDER}
@@ -112,19 +110,11 @@ def to_mp_spatial(acc: np.ndarray, gyr: np.ndarray, acc_calib: np.ndarray,
         g[:, 0] *= -1; g[:, 2] *= -1
     return (R @ a.T).T, (R @ g.T).T
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# 12 bis 25 Grad.
-#
-#
-#   sensor        usable recordings   spread   K
-#   right_ankle            6                9 Grad   86 Grad
-#   left_ankle             9               14 Grad  170 Grad
-#   right_wrist           13               41 Grad  110 Grad
-#   left_wrist            14               39 Grad  164 Grad
-#
-#
-#
+# Measured mounting rotations. Spread across recordings and total angle K:
+#   right_ankle    6 recordings    9 deg spread    86 deg
+#   left_ankle     9 recordings   14 deg spread   170 deg
+#   right_wrist   13 recordings   41 deg spread   110 deg
+#   left_wrist    14 recordings   39 deg spread   164 deg
 MOUNT_K = {
     "right_wrist": [
         [

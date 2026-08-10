@@ -1,17 +1,11 @@
-"""Generate virtual AX6 signals from a pose sequence.
+"""Virtual AX6 signals from a pose sequence (--npz from AMASS, or --pose).
 
-Input is either an AMASS-derived pose (--npz) or the pose of a real recording
-(--pose). For each of the four sensor sites a segment frame is built from the
-pose, the sensor position is placed on the limb, and specific force and angular
-rate are derived. The clean signal is then degraded with a noise profile
-measured from real AX6 recordings: axis scale error, gyro offset, Gauss-Markov
-bias drift, coloured noise, quantisation and range clipping.
+Places a sensor on each limb, derives specific force and angular rate, then
+degrades the clean signal with a noise profile measured from real recordings.
+Mounting is drawn per recording.
 
-Mounting is drawn per recording (rotation about the bone axis plus a few degrees
-of tolerance), so the generated set covers how differently a band can sit.
-
-Writes <sensor>_aligned.csv, <sensor>_mp_spatial.csv, <sensor>_segment.csv,
-a *_gt_3d.csv with the pose and synthesis_info.json with all settings used.
+Writes <sensor>_{aligned,mp_spatial,segment}.csv, *_gt_3d.csv and
+synthesis_info.json.
 """
 import argparse
 import json
@@ -27,16 +21,28 @@ ACC = ["acc_x", "acc_y", "acc_z"]
 GYR = ["gyr_x", "gyr_y", "gyr_z"]
 
 SEGMENTS = {
-    "left_wrist":  (13, 15, 11),   # Ellenbogen -> Handgelenk, Referenz Schulter
+    "left_wrist":  (13, 15, 11),   # elbow -> wrist, reference shoulder
     "right_wrist": (14, 16, 12),
     "left_ankle":  (25, 27, 23),   # knee -> ankle, reference hip
     "right_ankle": (26, 28, 24),
 }
-# im selben System landen.
+# (proximal, joint, distal) for the anatomical frame, as in estimate_mount.py
 CHAIN = {"left_wrist": (11, 13, 15), "right_wrist": (12, 14, 16),
          "left_ankle": (23, 25, 27), "right_ankle": (24, 26, 28)}
-# offset in the segment frame (x, along the bone, z) in metres:
+# sensor offset in the segment frame (x, along the bone, z), in metres
 SENSOR_OFFSET = np.array([0.015, -0.030, 0.010])
+
+# Frequencies inside the impact band that cannot be an image of a 60 or 120 Hz
+# source. They give the baseline the image frequencies are compared against.
+CONTROL_FREQUENCIES = [27.0, 33.0, 47.0, 53.0, 67.0, 73.0, 87.0]
+
+# Calibrated on 24 real sensor streams (no images possible, they are measured),
+# 8 corrected synthetic ones and 25 recordings of the faulty 800-set:
+#   real           0.87 - 1.51
+#   corrected      0.93 - 1.94
+#   faulty set     4.55 - 249      (per recording, worst of its four sensors)
+# At 3.0 every faulty recording is rejected and nothing clean is.
+IMAGE_TONE_LIMIT = 3.0
 
 ACC_RANGE = 16.0 * G_REF     # AX6: +-16 g
 GYR_RANGE = 2000.0           # AX6: +-2000 dps
@@ -59,15 +65,17 @@ def load_npz(path: Path):
     d = np.load(path)
     P = d["joints"].astype(float)
     fps = float(d["fps"]) if "fps" in d else 50.0
+    if not np.isfinite(fps) or fps <= 0:
+        raise SystemExit(f"{path.name}: frame rate is {fps}. Regenerate the pose "
+                         f"with amass_to_pose.py.")
     root = d["root"].astype(float) if "root" in d.files else None
     seg = d["seg_rot"].astype(float) if "seg_rot" in d.files else None
     return P, np.arange(len(P)) / fps, root, seg
 
 
-# ----------------------------------------------------------------- Signalhelfer
+# ------------------------------------------------------------------- signals
 def lowpass(x: np.ndarray, fs: float, cutoff: float) -> np.ndarray:
-    """Nullphasiger Tiefpass. Nutzt scipy, falls vorhanden, sonst einen
-    Gauss-Kernel (ebenfalls nullphasig)."""
+    """Zero-phase low pass. scipy if available, otherwise a Gaussian kernel."""
     if cutoff <= 0 or cutoff >= fs / 2:
         return x
     try:
@@ -84,8 +92,98 @@ def lowpass(x: np.ndarray, fs: float, cutoff: float) -> np.ndarray:
                          for i in range(x.shape[1])], axis=1)
 
 
+def lowpass_rotations(R: np.ndarray, fs: float, cutoff: float) -> np.ndarray:
+    """Low-pass (T,...,3,3) rotations, re-orthonormalised by polar decomposition."""
+    R = np.asarray(R, float)
+    if cutoff <= 0 or cutoff >= fs / 2:
+        return R
+    shape = R.shape
+    sm = lowpass(R.reshape(len(R), -1), fs, cutoff).reshape(shape)
+    U, _, Vt = np.linalg.svd(sm)
+    out = U @ Vt
+    flip = np.linalg.det(out) < 0            # undo reflections
+    if np.any(flip):
+        U = U.copy()
+        U[flip, ..., -1] *= -1
+        out = U @ Vt
+    return out
+
+
+def image_frequencies(fs: float, fs_src: float, harmonics: int = 4):
+    """-> source-rate images folded into [0, fs/2].
+
+    Interpolation repeats the baseband at every multiple of the source rate.
+    On the sensor grid those repeats fold back below Nyquist: a 120 Hz source
+    on a 200 Hz grid gives 40 and 80 Hz, a 60 Hz source gives 20, 40, 60 and
+    80 Hz - so checking only |fs - fs_src| misses most of them.
+    """
+    found = []
+    for k in range(1, harmonics + 1):
+        f = (k * fs_src) % fs
+        if f > fs / 2:
+            f = fs - f
+        if 1.0 < f < fs / 2 - 1.0:
+            found.append(f)
+    out = []                              # merge near-duplicates: fs is not integer,
+    for f in sorted(found):               # so 80.00 and 79.99 are the same image
+        if not out or f - out[-1] > 1.0:
+            out.append(f)
+    return [round(f, 1) for f in out]
+
+
+def image_tone_ratio(sig: np.ndarray, fs: float, images,
+                     lo: float = 20.0, hi: float = 90.0):
+    """-> (worst image relative to the control frequencies, where it sits).
+
+    Two normalisations, both needed:
+
+    A tone is measured against its LOCAL surroundings, not against the whole
+    band. At the edge of the low pass the band median lies far below the local
+    level, so every image there would look like a tone.
+
+    That local peak-to-median is then divided by the same quantity at
+    CONTROL_FREQUENCIES, where no image can be. Peak-to-median is biased
+    upwards for any structured spectrum - real recordings score 2.5 to 5.8
+    unnormalised - and dividing by the control value removes that bias. Clean
+    data then sits at 1, whatever the spectrum looks like otherwise.
+    """
+    x = np.linalg.norm(np.asarray(sig, float), axis=1)
+    x = x - x.mean()
+    nseg = int(2 ** int(np.log2(max(len(x) // 4, 256))))
+    inside = [f for f in np.atleast_1d(images) if lo <= f <= hi]
+    if nseg < 256 or nseg > len(x) or not inside:
+        return float("nan"), float("nan")
+    w = np.hanning(nseg)
+    P = np.mean([np.abs(np.fft.rfft(x[i:i + nseg] * w)) ** 2
+                 for i in range(0, len(x) - nseg + 1, nseg // 2)], axis=0)
+    f = np.fft.rfftfreq(nseg, 1.0 / fs)
+
+    def peak_over_ring(f0):
+        near = (f >= f0 - 1.5) & (f <= f0 + 1.5)
+        ring = (f >= f0 - 8.0) & (f <= f0 + 8.0) & ~near
+        if not near.any() or not ring.any():
+            return float("nan")
+        return float(P[near].max() / max(np.median(P[ring]), 1e-30))
+
+    control = [v for v in (peak_over_ring(c) for c in CONTROL_FREQUENCIES)
+               if np.isfinite(v)]
+    if not control:
+        return float("nan"), float("nan")
+    base = max(float(np.median(control)), 1e-12)
+
+    worst, at = float("nan"), float("nan")
+    for f0 in inside:
+        r = peak_over_ring(f0)
+        if not np.isfinite(r):
+            continue
+        r /= base
+        if not np.isfinite(worst) or r > worst:
+            worst, at = r, f0
+    return worst, at
+
+
 def resample_uniform(P: np.ndarray, t: np.ndarray, fs_out: float):
-    """Auf ein gleichmaessiges Zeitraster interpolieren."""
+    """Interpolate onto a uniform time grid."""
     t0, t1 = float(t[0]), float(t[-1])
     tn = np.arange(t0, t1, 1.0 / fs_out)
     T, J, _ = P.shape
@@ -180,7 +278,7 @@ def rotvec_to_matrix(r: np.ndarray) -> np.ndarray:
 
 
 def _perpendicular(u: np.ndarray) -> np.ndarray:
-    """Irgendein Einheitsvektor senkrecht zu u, numerisch stabil gewaehlt."""
+    """Any unit vector perpendicular to u."""
     a = np.zeros(3)
     a[int(np.argmin(np.abs(u)))] = 1.0
     v = np.cross(u, a)
@@ -200,11 +298,11 @@ def segment_frames(P: np.ndarray, prox: int, dist: int, ref: int = None) -> np.n
         v = np.cross(a, b)
         s = float(np.linalg.norm(v))
         c = float(np.dot(a, b))
-        if s < 1e-9:                                   # Richtung unveraendert
+        if s < 1e-9:                                   # direction unchanged
             x = R[t - 1][:, 0] if c > 0 else -R[t - 1][:, 0]
         else:
             x = rotvec_to_matrix(v / s * np.arctan2(s, c)) @ R[t - 1][:, 0]
-        x = x - np.dot(x, b) * b                       # exakt senkrecht halten
+        x = x - np.dot(x, b) * b                       # keep exactly perpendicular
         n = np.linalg.norm(x)
         x = x / n if n > 1e-9 else _perpendicular(b)
         R[t] = np.stack([x, b, np.cross(x, b)], axis=1)
@@ -243,7 +341,7 @@ SEGMENT_ERROR_DEG = {
 
 
 def draw_segment_errors(rng, scale=1.0):
-    """-> konstante anatomische Restdrehung je Sensor und ihr Winkel in Grad."""
+    """-> constant residual rotation per sensor and its angle in degrees."""
     out, angles = {}, {}
     for name in SEGMENTS:
         target = SEGMENT_ERROR_DEG[name] * max(float(scale), 0.0)
@@ -262,11 +360,11 @@ def synth_root_motion(T: int, fs: float, rng, amp_horiz=0.25, amp_vert=0.02):
         return w / s * amp if s > 1e-9 else w
     x = band(amp_horiz, 0.15, 1.5)
     z = band(amp_horiz, 0.15, 1.5)
-    y = band(amp_vert, 0.8, 3.0)        # leichtes Auf und Ab beim Gehen
+    y = band(amp_vert, 0.8, 3.0)        # slight bob while walking
     return np.stack([x, y, z], axis=1)
 
 
-# ------------------------------------------------------------------ Verschlechtern
+# ------------------------------------------------------------------ degrade
 def coloured_noise(n: int, sigma: float, ar1: float, rng) -> np.ndarray:
     ar1 = float(np.clip(ar1, -0.95, 0.95))
     if abs(ar1) < 1e-6:
@@ -317,17 +415,17 @@ def sanitise_profiles(bank: dict, factor: float = 5.0) -> dict:
                     if d.get("ar1"):
                         d["ar1"] = [0.25] * 3
                     n_fixed += 1
-                    print(f"  [Profil] {pr.get('source_subject','?')} / {name} / {k}: "
+                    print(f"  [profile] {pr.get('source_subject','?')} / {name} / {k}: "
                           f"unusable quiet block, replaced by the median")
     if n_fixed:
-        print(f"  [Profil] {n_fixed} Eintraege ersetzt "
+        print(f"  [profile] {n_fixed} entries replaced "
               f"(Median acc {med['acc']:.4f}, gyr {med['gyr']:.4f})")
     return bank
 
 
 def degrade(sig: np.ndarray, kind: str, sp: dict, rng, fs: float,
             misalign_deg: float, jitter_scale: float):
-    """sig: (T,3) sauberes Signal im Sensorsystem."""
+    """sig: (T,3) clean signal in the sensor frame."""
     T = len(sig)
     if misalign_deg > 0:
         r = rng.normal(0, np.deg2rad(misalign_deg) / 2, 3)
@@ -355,38 +453,37 @@ def main():
     ap = argparse.ArgumentParser(description="virtual AX6 signals from a pose sequence")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--pose", help="*_gt_3d.csv with 33 MediaPipe joints")
-    src.add_argument("--npz", help="npz mit joints (T,J,3) und fps")
-    ap.add_argument("--profile", required=True, help="JSON aus Skript 11")
+    src.add_argument("--npz", help="npz with joints (T,J,3) and fps")
+    ap.add_argument("--profile", required=True, help="JSON from sensor_noise_profile.py")
     ap.add_argument("--out", required=True, help="output directory for the recording")
     ap.add_argument("--fs", type=float, default=None,
-                    help="Ziel-Abtastrate (Standard: aus dem Profil)")
+                    help="target sample rate (default: from the profile)")
     ap.add_argument("--smooth-hz", type=float, default=None,
-                    help="Tiefpass auf die Positionen vor dem Ableiten. Standard: 5 Hz "
-                         "for MediaPipe poses (--pose), 12 Hz for motion capture (--npz)")
+                    help="low pass before differentiating; default 5 Hz for --pose, "
+                         "14 Hz for --npz")
     ap.add_argument("--gt-fps", type=float, default=50.0,
-                    help="Bildrate der geschriebenen Ground Truth (wie unsere Videos)")
+                    help="frame rate of the written ground truth")
     ap.add_argument("--root-motion", choices=["auto", "file", "none", "random"], default="auto",
-                    help="auto: die echte Bahn aus der npz nehmen, sonst eine erzeugen")
+                    help="auto: real trajectory from the npz, otherwise synthesise one")
     ap.add_argument("--root-amp", type=float, default=0.10,
-                    help="Amplitude der kuenstlichen Rumpfbewegung in m. 0.10 entspricht "
-                         "about 2-3 m/s^2, i.e. normal walking; much more "
-                         "uebertoent die Gliedmassenbewegung.")
+                    help="amplitude of the synthetic root motion in m; 0.10 is about "
+                         "normal walking, much more drowns out the limb motion")
     ap.add_argument("--misalign-deg", type=float, default=8.0)
     ap.add_argument("--segment-error-scale", type=float, default=1.0,
-                    help="Skalierung der verbleibenden, recordingspezifischen Segmentframe-Fehler")
+                    help="scale of the residual per-recording segment frame error")
     ap.add_argument("--jitter-scale", type=float, default=1.0,
                     help="factor on the measured noise (>1 means noisier)")
     ap.add_argument("--foot-impacts", action="store_true",
-                    help="kurze Stoesse beim Fussaufsatz ergaenzen (experimentell)")
+                    help="add short impulses at foot strike (experimental)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--mount", default=None,
-                    help="JSON aus mount_calib.py. Ohne Angabe die aus video1 "
-                         "measured bone axes.")
+                    help="JSON from mount_calib.py; without it the bone axes "
+                         "measured on video1 are used")
     ap.add_argument("--roll", choices=["measured", "random", "zero"], default="random",
                     help="random (default): draw the roll per recording. "
                          "measured: adopt the measured mounting of the real "
                          "sensors, which is not yet accurate enough, see MOUNT_K "
-                         "in mounting.py. zero: ohne Verdrehung.")
+                         "in mounting.py. zero: no roll.")
     args = ap.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -412,17 +509,35 @@ def main():
         df = None
 
     if args.smooth_hz is None:
-        args.smooth_hz = 5.0 if args.pose else 25.0
-        print(f"Glaettung: {args.smooth_hz:.0f} Hz "
-              f"({'MediaPipe-Pose' if args.pose else 'Motion Capture'})")
+        # 14 Hz, not the earlier 25 Hz: that value was tuned against a signal
+        # still carrying the resampling image. docs/RESULTS.md section 3.
+        args.smooth_hz = 5.0 if args.pose else 14.0
+        print(f"smoothing: {args.smooth_hz:.0f} Hz "
+              f"({'MediaPipe pose' if args.pose else 'motion capture'})")
     if P.shape[1] < 29:
-        raise SystemExit(f"The pose has only {P.shape[1]} joints; required are the "
-                         f"MediaPipe-Indizes bis 28.")
+        raise SystemExit(f"The pose has only {P.shape[1]} joints; MediaPipe indices "
+                         f"up to 28 are required.")
     print(f"pose: {P.shape[0]} frames, {P.shape[1]} joints, {t[-1]-t[0]:.1f} s")
+
+    # Interpolation is not band limited, so the source rate images at
+    # |fs - fs_src| and omega^2 lifts it into the impact band. Everything
+    # entering the sensor position is cut below half the source rate.
+    fs_src = float(1.0 / np.median(np.diff(t)))
+    images = image_frequencies(fs, fs_src)
+    cut = args.smooth_hz
+    cap = 0.40 * fs_src
+    if cut > cap:
+        print(f"smoothing capped at {cap:.1f} Hz: the source runs at "
+              f"{fs_src:.1f} Hz, above that there is no real signal left.")
+        cut = cap
+    print(f"source rate {fs_src:.1f} Hz -> sensor rate {fs:.1f} Hz, low pass {cut:.1f} Hz")
+    print(f"source-rate images at " + ", ".join(f"{f:.0f}" for f in images) + " Hz"
+          + (f"  ({sum(20 <= f <= 90 for f in images)} inside the impact band)"
+             if images else ""))
 
     P, tn = resample_uniform(P, t, fs)
     T = len(tn)
-    flat = lowpass(P.reshape(T, -1), fs, args.smooth_hz)
+    flat = lowpass(P.reshape(T, -1), fs, cut)
     P = flat.reshape(T, -1, 3)
 
     mode = args.root_motion
@@ -432,11 +547,11 @@ def main():
         if root_real is None:
             raise SystemExit("--root-motion file, but the file contains no 'root'.")
         root = resample_uniform(root_real[:, None, :], t, fs)[0][:, 0, :]
-        root = lowpass(root, fs, args.smooth_hz)
+        root = lowpass(root, fs, cut)
         print(f"root motion: true trajectory from the sequence ({np.linalg.norm(root[-1]-root[0]):.1f} m travelled)")
     elif mode == "random":
         root = synth_root_motion(T, fs, rng, amp_horiz=args.root_amp)
-        print(f"Rumpfbewegung: kuenstlich ergaenzt (Amplitude {args.root_amp} m)")
+        print(f"root motion: synthesised (amplitude {args.root_amp} m)")
     else:
         root = np.zeros((T, 3))
         print("root motion: none")
@@ -446,12 +561,11 @@ def main():
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     dt = 1.0 / fs
-    g_world = np.array([0.0, +G_REF, 0.0])     # MediaPipe: +y zeigt nach unten
+    g_world = np.array([0.0, +G_REF, 0.0])     # MediaPipe: +y is down
 
     bone_axes = mounting.load_bone_axes(args.mount)
     drawn = mounting.draw_rolls(rng)
     rolls = drawn if args.roll == "random" else {s: 0.0 for s in mounting.SENSOR_ORDER}
-    # Umrechnen ins Segmentsystem sauber wieder heraus.
     mis = {}
     for n in SEGMENTS:
         r = rng.normal(0, np.deg2rad(args.misalign_deg) / 2, 3) if args.misalign_deg > 0 \
@@ -463,13 +577,16 @@ def main():
     else:
         MT = {n: mis[n] @ mounting.mount_matrix(n, bone_axes, rolls[n]) for n in SEGMENTS}
         print("mounting: bone axis measured, roll "
-              + ("ausgewuerfelt (" + ", ".join(f"{n.split('_')[0][0]}{n.split('_')[1][0]}"
-                 f" {rolls[n]:.0f} Grad" for n in SEGMENTS) + ")"
-                 if args.roll == "random" else "auf null gesetzt"))
+              + ("drawn (" + ", ".join(f"{n.split('_')[0][0]}{n.split('_')[1][0]}"
+                 f" {rolls[n]:.0f} deg" for n in SEGMENTS) + ")"
+                 if args.roll == "random" else "set to zero"))
 
     seg_on_grid = None
     if seg_rot is not None:
+        # Same low pass as the positions: the rotation reaches the sensor
+        # position through the lever arm and the angular rate through so3_log.
         seg_on_grid = resample_rotations(seg_rot, t, tn)          # (T,4,3,3)
+        seg_on_grid = lowpass_rotations(seg_on_grid, fs, cut)
         print("segment frames: from the SMPL rotations (roll about the bone axis "
               "preserved)")
     else:
@@ -477,6 +594,7 @@ def main():
               "the bone axis)")
 
     signals, seg_signals = {}, {}
+    image_ratio, image_at = {}, {}
     segment_error, segment_error_angles = draw_segment_errors(
         rng, scale=args.segment_error_scale)
     for si, (name, (prox, dist, ref)) in enumerate(SEGMENTS.items()):
@@ -498,12 +616,12 @@ def main():
         sp = prof["sensors"].get(name, {})
         acc_p = dict(sp.get("acc", {}))
         gyr_p = dict(sp.get("gyr", {}))
-        acc_p["scale"] = sp.get("acc_scale_vs_9_81", 1.0)        # Kalibrierfehler uebernehmen
+        acc_p["scale"] = sp.get("acc_scale_vs_9_81", 1.0)        # calibration error
         acc_p.setdefault("bias", [0.0, 0.0, 0.0])
 
         if args.foot_impacts and name.endswith("ankle"):
             vy = np.gradient(pos[:, 1], dt)
-            hit = np.where((vy[:-1] > 0.4) & (vy[1:] <= 0.4))[0]  # Abbremsen nach unten
+            hit = np.where((vy[:-1] > 0.4) & (vy[1:] <= 0.4))[0]  # downward braking
             for i in hit:
                 w_len = int(0.03 * fs)
                 env = np.exp(-np.linspace(0, 4, w_len))
@@ -514,13 +632,14 @@ def main():
         acc_s = acc_s @ MT[name].T
         gyr_s = gyr_s @ MT[name].T
 
-        # Fixed rotation from the sensor frame into the anatomical frame. For real
+        # Fixed rotation from the sensor frame into the anatomical frame.
         A, qual = anatomical_frame(P, CHAIN[name])
         w = np.clip(qual - 0.35, 0.0, None)
         if w.sum() < 1e-6:
             w = np.ones(len(A))
         Q = mean_rotation(np.einsum("tji,tjk->tik", A, R), w / w.sum())
 
+        # A tone at the image frequency is an artefact, not motion content.
         acc_s = degrade(acc_s, "acc", acc_p, rng, fs, 0.0, args.jitter_scale)
         gyr_s = degrade(gyr_s, "gyr", gyr_p, rng, fs, 0.0, args.jitter_scale)
         K = Q @ MT[name].T
@@ -530,9 +649,23 @@ def main():
                             "acc_x": acc_s[:, 0], "acc_y": acc_s[:, 1], "acc_z": acc_s[:, 2],
                             "gyr_x": gyr_s[:, 0], "gyr_y": gyr_s[:, 1], "gyr_z": gyr_s[:, 2]})
         out.to_csv(out_dir / f"{name}_aligned.csv", index=False, float_format="%.6g")
+        image_ratio[name], image_at[name] = image_tone_ratio(acc_s, fs, images)
         signals[name] = (acc_s, gyr_s)
         print(f"  {name}: |acc| median {np.median(np.linalg.norm(acc_s,axis=1)):6.2f} m/s^2 · "
-              f"|gyr| median {np.median(np.linalg.norm(gyr_s,axis=1)):7.2f} deg/s")
+              f"|gyr| median {np.median(np.linalg.norm(gyr_s,axis=1)):7.2f} deg/s · "
+              f"image tone {image_ratio[name]:5.1f}x")
+
+    finite = [(v, image_at[k]) for k, v in image_ratio.items() if np.isfinite(v)]
+    if not finite:
+        print(f"\nNOTE: no source-rate image falls inside 20-90 Hz, nothing to check.")
+    else:
+        worst, at = max(finite)
+        if worst > IMAGE_TONE_LIMIT:
+            print(f"\nWARNING: a tone at {at:.0f} Hz stands {worst:.0f}x above its "
+                  f"surroundings.\nThat is an image of the source rate ({fs_src:.1f} Hz), "
+                  f"pulled up by omega^2 in the\ndouble differentiation, not motion "
+                  f"content. Lower --smooth-hz, or pick a\nsensor rate whose images "
+                  f"avoid 20 to 90 Hz.")
 
     for name, (acc_s, gyr_s) in signals.items():
         b_dev = np.asarray(bone_axes[name], float)
@@ -555,7 +688,7 @@ def main():
 
     gt_name = "synthetic_gt_3d.csv"
     if df is not None:
-        df.to_csv(out_dir / gt_name, index=False)          # Original unveraendert
+        df.to_csv(out_dir / gt_name, index=False)          # original, unchanged
     else:
         tg = np.arange(tn[0], tn[-1], 1.0 / args.gt_fps)
         cols = {"frame": np.arange(len(tg)), "time": tg}
@@ -563,22 +696,26 @@ def main():
             for k, a in enumerate("xyz"):
                 cols[f"j{j}_{a}"] = np.interp(tg, tn, P[:, j, k])
         pd.DataFrame(cols).to_csv(out_dir / gt_name, index=False, float_format="%.6g")
-        print(f"Ground Truth: {len(tg)} Frames @ {args.gt_fps:.0f} fps, hueftzentriert")
+        print(f"ground truth: {len(tg)} frames @ {args.gt_fps:.0f} fps, pelvis-centred")
 
     (out_dir / "synthesis_info.json").write_text(json.dumps({
         "source_pose": args.pose or args.npz, "profile": args.profile,
         "profile_source": prof.get("source_subject"), "profile_index": profile_index,
         "fs_hz": fs, "gt_fps": args.gt_fps, "seed": args.seed,
-        "smooth_hz": args.smooth_hz,
+        "smooth_hz": args.smooth_hz, "smooth_cut_hz": cut,
+        "source_fps": fs_src, "image_frequencies_hz": images,
+        "image_tone_ratio": image_ratio, "image_tone_at_hz": image_at,
+        "image_tone_limit": IMAGE_TONE_LIMIT,
+        "rotation_lowpass": bool(seg_rot is not None),
         "root_motion": mode, "root_amp_m": args.root_amp,
-        "segment_frames": "smpl" if seg_rot is not None else "aus Positionen",
+        "segment_frames": "smpl" if seg_rot is not None else "from positions",
         "rotation_resampling": "slerp" if seg_rot is not None else None,
         "segment_frame_error_deg": segment_error_angles,
         "mount_roll_deg": rolls,
         "misalign_deg": args.misalign_deg, "jitter_scale": args.jitter_scale,
         "foot_impacts": bool(args.foot_impacts),
     }, indent=2), encoding="utf-8")
-    print(f"\nGeschrieben nach {out_dir}")
+    print(f"\nwritten to {out_dir}")
 
 
 if __name__ == "__main__":

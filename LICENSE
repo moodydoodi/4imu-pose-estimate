@@ -1,0 +1,64 @@
+MIT License
+
+Copyright (c) 2026 Dalia Salih, Anton Rabanus
+
+Technical Project, B.Sc. Data Science, Künstliche Intelligenz und Intelligente
+Systeme, Hochschule Düsseldorf.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===============================================================================
+SCOPE — what this licence does and does not cover
+===============================================================================
+
+The MIT licence above applies to the source code in this repository
+(src/, dashboard/, config/) and to the documentation (README.md, docs/).
+
+It does NOT apply to the following, which are governed by their own terms:
+
+  AMASS motion capture data
+      Not contained in this repository. Distributed by the Max Planck Institute
+      for Intelligent Systems under its own licence, which does not permit
+      redistribution. https://amass.is.tue.mpg.de
+      Mahmood et al., "AMASS: Archive of Motion Capture as Surface Shapes",
+      ICCV 2019.
+
+  SMPL-H body model ("Extended SMPL+H")
+      Not contained in this repository. Same source and licence terms as AMASS,
+      including the restriction on redistribution.
+
+  Own recordings (sensor data, video, MediaPipe ground truth)
+      The full recordings are NOT published: they contain identifiable video of
+      participants who consented to use within this project only.
+      data/sample/ contains a 90-second excerpt of the derived sensor and
+      landmark data of one recording — numeric data only, no video — included
+      so that the pipeline can be executed. It is covered by the MIT licence
+      above but must not be used to attempt re-identification.
+
+  MediaPipe Pose (Google)
+      Used to produce the ground-truth landmarks. Apache License 2.0.
+      Not redistributed here.
+
+  results/ and docs/RESULTS.md
+      Derived evaluation output of this project, covered by the MIT licence.
+
+Anyone reusing this code for their own data is responsible for obtaining AMASS
+and the SMPL-H body model directly from the Max Planck Institute and for
+complying with those terms. src/synth/check_setup.py reports which of these
+external assets are missing and where they are expected.

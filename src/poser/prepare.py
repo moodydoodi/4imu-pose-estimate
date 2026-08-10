@@ -1,18 +1,9 @@
-"""Feature and skeleton preparation. Does not require torch.
+"""Build the canonical skeleton and the feature cache.
+Writes one .npz per recording to --cache. --skeleton derives a new skeleton,
+--skeleton-in reuses an existing one; synthetic data must reuse the real one.
 
-  1. read every recording under --data
-  2. derive the canonical skeleton (median bone length across recordings) and
-     write it to --skeleton
-  3. compute features and store one .npz per recording in the cache
-
-Synthetic recordings take the same skeleton via --skeleton-in. Only then are
-pre-training and fine-tuning comparable; otherwise the body-size difference
-between AMASS subjects and ours becomes an error the network can only read as a
-pose error.
-
-    python prepare.py --data data/processed --exclude video7 \
-        --suffix _segment --frame body --cache cache/real_body \
-        --skeleton config/skeleton.json
+    python prepare.py --data data/processed --suffix _segment --frame body \
+        --cache cache/real_body --skeleton config/skeleton.json
 """
 import argparse
 import time
@@ -32,13 +23,28 @@ def main():
     ap.add_argument("--suffix", default="_segment")
     ap.add_argument("--fps", type=float, default=FPS)
     ap.add_argument("--exclude", nargs="*", default=[])
-    ap.add_argument("--skeleton", default=None, help="write a new skeleton file here")
-    ap.add_argument("--skeleton-in", default=None, help="reuse an existing skeleton file")
+    ap.add_argument("--skeleton", default=None,
+                    help="derive a NEW skeleton from --data and write it here. "
+                         "Refuses to overwrite an existing file unless --force.")
+    ap.add_argument("--skeleton-in", default=None,
+                    help="reuse an existing skeleton file instead of deriving one")
+    ap.add_argument("--force", action="store_true",
+                    help="allow --skeleton to overwrite an existing file")
     ap.add_argument("--frame", choices=["world", "body"], default="world",
                     help="body rotates the target pose so the hip axis points along "
                          "+x, removing the unobservable rotation about the vertical")
     ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
+
+    if a.skeleton and a.skeleton_in:
+        raise SystemExit("--skeleton and --skeleton-in are mutually exclusive: "
+                         "--skeleton writes a new file, --skeleton-in reads one.")
+    out_skel = Path(a.skeleton or "config/skeleton.json")
+    if not a.skeleton_in and out_skel.exists() and not a.force:
+        raise SystemExit(
+            f"{out_skel} already exists and would be overwritten.\n"
+            f"  To reuse it (the usual case):  --skeleton-in {out_skel}\n"
+            f"  To deliberately rebuild it:    --skeleton {out_skel} --force")
 
     dirs = dataio.find_recordings(a.data, exclude=a.exclude)
     if a.limit:
@@ -60,7 +66,7 @@ def main():
             if P is not None:
                 poses[d.name] = P
         canon, per = SK.canonical_from_recordings(poses)
-        out = a.skeleton or "config/skeleton.json"
+        out = out_skel
         SK.save_skeleton(out, canon, per)
         print(f"skeleton written to {out}")
 
@@ -69,7 +75,7 @@ def main():
         spread = (max(v[i-1] for v in per.values()) -
                   min(v[i-1] for v in per.values())) * 1000 if per else 0.0
         print(f"  {i:2d} {SK.JOINT_NAMES[i] if hasattr(SK,'JOINT_NAMES') else '':14s}"
-              f"{canon[i-1]*1000:7.0f}   spread across recordings {spread:5.0f}")
+              f"{canon[i-1]*1000:7.0f}   spread {spread:5.0f}")
 
     # ---- cache
     cache = Path(a.cache)
@@ -100,13 +106,13 @@ def main():
     print(f"\n{ok} recordings cached in {cache}"
           + (f", {len(skip)} skipped: {', '.join(skip)}" if skip else ""))
 
-    # ---- reference values so later numbers can be judged
-    print("\nreference value (MPJPE of the trivial mean pose):")
+    # ---- reference values
+    print("\nMPJPE of the trivial mean pose:")
     for p in sorted(cache.glob("*.npz"))[:8]:
         z = np.load(p, allow_pickle=True)
         Y = z["Y"]
         mean_pose = np.repeat(Y.mean(0)[None], len(Y), 0)
-        print(f"  {str(z['name']):14s} mean-pose baseline {SK.mpjpe(mean_pose, Y):6.1f} mm")
+        print(f"  {str(z['name']):14s} {SK.mpjpe(mean_pose, Y):6.1f} mm")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,14 @@
-numpy>=1.24
+# Core: preprocessing, feature extraction, evaluation.
+numpy>=1.24,<3
 pandas>=2.0
 scipy>=1.10
 
-# Training and inference only. The preprocessing, synthesis and evaluation
+# Training and inference only. Preprocessing, synthesis and the evaluation
 # scripts run without it.
 torch>=2.0
+
+# Optional.
+matplotlib>=3.7      # comparison plots in src/synth/validate_synthetic.py
+reportlab>=4.0       # PDF report in src/poser/compare_metrics_to_pdf.py
+
+# Developed and tested with Python 3.11, numpy 2.2, pandas 2.3, torch 2.x.

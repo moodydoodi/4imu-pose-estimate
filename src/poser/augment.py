@@ -1,14 +1,4 @@
-"""Augmentation matched to this sensor setup.
-
-The important case is rotation about the gravity axis. Without a magnetometer
-that degree of freedom is not determined, and a band worn slightly rotated
-produces exactly this transform. It is applied about the gravity direction that
-is already part of the features, not about a fixed axis; gravity itself is the
-rotation axis and stays unchanged.
-
-For input in the segment frame the mounting has already been factored out, so a
-few degrees of tolerance are enough.
-"""
+"""Input augmentation: yaw about gravity, small rotations, jitter, dropout."""
 import torch
 
 from config import FEAT_PER_SENSOR, SENSORS
@@ -53,7 +43,7 @@ def small_rotation(X, max_deg=5.0):
 
 
 def jitter(X, acc_sigma=0.01, gyr_sigma=0.01, bias_sigma=0.01):
-    """Noise plus a constant offset per window; the AX6 gyro zero drifts slowly."""
+    """White noise plus a constant gyro offset per window."""
     out = X.clone()
     for i in range(len(SENSORS)):
         o = i * FEAT_PER_SENSOR

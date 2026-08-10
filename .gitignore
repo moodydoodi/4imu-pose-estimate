@@ -3,16 +3,19 @@ __pycache__/
 .venv/
 venv/
 
+# Office lock files (~$foo.pptx) and OS clutter.
+~$*
+.DS_Store
+Thumbs.db
+
 # Data and derived artefacts are not versioned.
 data/raw/
 data/processed/
 cache/
 models/
 logs/
-synthdata/input/
-synthdata/output/
+synthdata/
 *.pt
 *.npz
-!data/sample/**/*.npz
 
 # Keep the small evaluation outputs under results/.

@@ -1,17 +1,10 @@
-"""Convert stored predictions into dashboard input. Does not require torch.
+"""pred_*.npz from train.py -> dashboard CSV.
+Body-frame predictions are rotated into the world frame with the ground-truth
+heading so they line up with the video; flagged as heading_from_gt in the
+metrics. No error figure changes, both sides get the same rotation.
 
-train.py writes one pred_<video>.npz per test video containing both the
-predicted and the true pose frame by frame. The dashboard needs nothing beyond a
-predictions__<name>.csv next to the *_gt_3d.csv, so this writes those directly,
-for any number of models side by side.
-
-Body-frame models predict the pose without heading, which four limb sensors
-without a magnetometer cannot observe. For display next to the video the heading
-is taken from the ground truth. That changes no error figure, since both sides
-are rotated by the same matrix, but it is recorded as "heading_from_gt".
-
-    python npz_to_dashboard.py --models models/finetune_s0 --cache cache/real_body \
-        --data data/processed
+    python npz_to_dashboard.py --models models/finetune_s0 \
+        --cache cache/real_body --data data/processed
 """
 import argparse
 import json
@@ -106,7 +99,7 @@ def main():
 
             extra = {"frame_trained": frame, "heading_from_gt": False}
             if frame == "body":
-                # Take the world pose from the recording folder to get the rotation
+                # World pose from the recording folder, to recover the rotation
                 tg, W = dataio.read_pose(dst)
                 if W is None:
                     print(f"  {vid}: no *_gt_3d.csv, cannot recover the heading")

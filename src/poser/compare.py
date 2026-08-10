@@ -1,9 +1,6 @@
-"""Paired comparison of two or more training runs.
-
-The difference between variants is on the order of one to two millimetres, and
-the spread between two runs of the same variant can be just as large, so single
-numbers say nothing. Differences are therefore taken per test video, and mean,
-spread and a sign test are reported.
+"""Quick paired comparison of two or more runs: mean, spread, sign test.
+Differences are taken per test recording. For the reported statistic with
+bootstrap intervals use compare_metrics_to_pdf.py.
 
     python compare.py models/base_s0 models/finetune_s0
 """

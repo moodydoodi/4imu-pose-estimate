@@ -1,14 +1,7 @@
-"""Training and evaluation.
-
-Two phases, as is usual with small real datasets: pre-train on the synthetic
-recordings, then fine-tune on the real ones with a lower learning rate. Not
-mixed in one pool - six videos would be drowned out by hundreds of synthetic
-recordings.
-
-Split: one video for testing, a second for validation (early stopping), the rest
-for training. The test video is never touched during training. --loro repeats
-this with every video as the test case and averages; a single number on a single
-test video is too noisy to judge a change by.
+"""Training and leave-one-recording-out evaluation.
+One recording tests, one validates, the rest train. --loro repeats this with
+every recording as the test case. Writes weights, model_card.json, predictions
+and metrics.json to --out.
 
     python train.py --dry-run
     python train.py --cache cache/real_body --loro
@@ -58,12 +51,7 @@ class Cache:
         return Cache(recs=[self.recs[i] for i in sorted(idx)])
 
     def scramble(self):
-        """Swap target poses between recordings.
-
-        Input and target distribution are unchanged; only the relation between
-        them is destroyed. Control condition for whether pre-training transfers
-        anything at all.
-        """
+        """Pair each recording's features with another one's poses (control)."""
         n = len(self.recs)
         if n < 2:
             raise SystemExit("--scramble-targets needs at least two recordings.")
@@ -101,12 +89,7 @@ class Cache:
 
 # ---------------------------------------------------------------- metrics
 def procrustes_align(P, Y):
-    """Rigid alignment per frame (rotation and scale).
-
-    PA-MPJPE separates a wrong pose from a merely rotated one. With four sensors
-    and no magnetometer, orientation in space is inherently less determined than
-    shape.
-    """
+    """Per-frame Procrustes alignment of P onto Y (rotation and scale)."""
     Pc, Yc = P - P.mean(1, keepdims=True), Y - Y.mean(1, keepdims=True)
     H = np.einsum("tji,tjk->tik", Pc, Yc)
     U, S, Vt = np.linalg.svd(H)
@@ -128,8 +111,7 @@ def metrics(P, Y):
 
 @torch.no_grad()
 def predict_sequence(model, X, device, win=WIN, hop=None):
-    """Overlapping sliding windows, combined with a triangular weight that
-    damps the edges where the BiLSTM has little context."""
+    """(T,N_FEAT) -> (T,13,3), overlapping windows with triangular blending."""
     hop = hop or win // 2
     T = len(X)
     acc = np.zeros((T, N_JOINTS, 3)); wsum = np.zeros((T, 1, 1))
@@ -158,15 +140,13 @@ def run_one(cache, test, val, args, canon, device, evalcache=None):
         va = cache.subset({val}) if val else None
         te = cache.subset({test})
     else:
-        # Test and validation come from a different pool, which measures
-        # "trained on synthetic only, tested on real" without letting a real
-        # recording into training.
+        # Test and validation from a separate pool: train on synthetic, test on real.
         train_names = list(cache.names)
         tr = cache
         va = evalcache.subset({val}) if val else None
         te = evalcache.subset({test})
 
-    torch.manual_seed(args.seed)          # jeder Fold startet gleich
+    torch.manual_seed(args.seed)          # every fold starts from the same state
     torch.cuda.manual_seed_all(args.seed)
     model = Poser(canon, hidden=args.hidden, layers=args.layers,
                   dropout=args.dropout).to(device)
@@ -322,9 +302,8 @@ def main():
         print(f"--- test {test}, validation {val}")
         model, m, P, Ytrue = run_one(cache, test, val, args, canon, device, evalcache)
         torch.save(model.state_dict(), Path(args.out) / f"best_{test}.pt")
-        torch.save(model.state_dict(), Path(args.out) / "best.pt")   # stable name
-        # Model card next to the weights: which files and which reference frame
-        # the model was trained on. Without it the weights cannot be reused.
+        torch.save(model.state_dict(), Path(args.out) / "best.pt")   # last fold
+        # Model card: suffix, reference frame and rate the weights belong to.
         (Path(args.out) / "model_card.json").write_text(json.dumps({
             "kind": "poser",
             "suffix": cache.meta.get("suffix", args.suffix),
@@ -334,8 +313,7 @@ def main():
             "n_feat": N_FEAT, "seed": args.seed, "trained_on": args.cache,
             "init_from": args.init,
         }, indent=2))
-        # Store the prediction as well; small enough to move around and the
-        # basis for any closer analysis afterwards.
+        # Predictions, enough to redo the evaluation without retraining.
         np.savez_compressed(Path(args.out) / f"pred_{test}.npz",
                             P=P.astype(np.float16), Y=Ytrue.astype(np.float16),
                             name=test)
@@ -369,8 +347,7 @@ def main():
 
 # ---------------------------------------------------------------- dry run
 def dry_run(args):
-    """Check in a few seconds that the mechanics are sound: torch forward
-    kinematics against the numpy reference, and exact bone lengths."""
+    """Check torch FK against the numpy reference and bone-length exactness."""
     print("Dry run, no training.\n")
     torch.manual_seed(0)
     L = np.array([0.10, 0.40, 0.39, 0.10, 0.33, 0.44,

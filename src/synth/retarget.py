@@ -1,14 +1,7 @@
-"""Scale an AMASS sequence to the body proportions of the real recordings.
+"""Scale an AMASS sequence to the bone lengths of the real recordings.
 
-SMPL and MediaPipe do not mean the same thing by "hip": SMPL places the joint in
-the femoral head, MediaPipe further out. Measured on video1 the MediaPipe hip
-points are about 20 cm apart, the SMPL ones only 12. Left unchanged, synthetic
-recordings would carry a differently built skeleton than the real ones.
-
-Every bone is therefore scaled to the length it has in the real recordings.
-Directions, and hence the motion, stay unchanged. Targets are averaged between
-left and right because MediaPipe systematically underestimates the side facing
-away from the camera.
+Directions and therefore the motion stay unchanged. Targets are averaged
+left/right, because MediaPipe underestimates the side away from the camera.
 """
 from pathlib import Path
 
@@ -27,7 +20,7 @@ TREE = [
 FOOT = [(27, 29, "ankle_heel"), (28, 30, "ankle_heel"),
         (27, 31, "ankle_toe"), (28, 32, "ankle_toe")]
 
-HEAD_COPIES = range(1, 11)          # Gesichtspunkte folgen der Nase
+HEAD_COPIES = range(1, 11)          # face landmarks follow the nose
 HAND_L, HAND_R = (17, 19, 21), (18, 20, 22)
 
 
@@ -52,7 +45,7 @@ def targets_from_recording(folder) -> dict:
     folder = Path(folder)
     files = sorted(folder.glob("*_gt_3d.csv"))
     if not files:
-        raise SystemExit(f"Keine *_gt_3d.csv in {folder}")
+        raise SystemExit(f"No *_gt_3d.csv in {folder}")
     df = pd.read_csv(files[0])
     df.columns = [c.strip().lower() for c in df.columns]
     need = [f"j{j}_{a}" for j in range(33) for a in "xyz"]

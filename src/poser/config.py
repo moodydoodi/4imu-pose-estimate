@@ -8,7 +8,7 @@ GYR_COLS = ["gyr_x", "gyr_y", "gyr_z"]
 G = 9.80665
 
 # -------------------------------------------------------------------- skeleton
-# 13 joints. Joint 0 is the pelvis (mid-hip) and the root of the tree.
+# 13 joints, joint 0 is the pelvis (mid-hip) and the root.
 MP_INDEX = {
     0: None,                  # pelvis: mean of MediaPipe 23 and 24
     1: 23, 2: 25, 3: 27,      # left leg
@@ -24,19 +24,18 @@ JOINT_NAMES = ["pelvis", "hip_l", "knee_l", "ankle_l",
                "shoulder_l", "elbow_l", "wrist_l",
                "shoulder_r", "elbow_r", "wrist_r"]
 
-# Joints that carry a sensor. They get their own intermediate output stage.
+# Joints carrying a sensor; they get their own output stage.
 LEAF_JOINTS = [9, 12, 3, 6]
 LEAF_BONES = [9, 12, 3, 6]
 
 # -------------------------------------------------------------------- sampling
-FPS = 50.0            # target rate; the pose ground truth runs at about 50 fps
+FPS = 50.0            # target rate, matches the pose ground truth
 WIN = 200             # window length in frames (4 s)
 HOP = 20              # training stride
-HIGHBAND = (20.0, 90.0)   # impact band, see features.py
+HIGHBAND = (20.0, 90.0)   # impact band
 
 # ----------------------------------------------------------------------- input
-# Per sensor: gravity direction (3), linear acceleration (3), angular rate (3),
-# |acc| (1), |gyr| (1), impact-band energy (1).
+# Per sensor: gravity (3), linear acc (3), gyro (3), |acc|, |gyr|, impact band.
 FEAT_PER_SENSOR = 12
 N_FEAT = FEAT_PER_SENSOR * len(SENSORS)
 

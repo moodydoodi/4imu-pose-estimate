@@ -1,0 +1,17 @@
+# Normalise line endings. Without this, OneDrive/Windows flips CRLF<->LF and
+# every CSV and JSON shows up as a full-file diff.
+* text=auto eol=lf
+
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.csv   text eol=lf
+*.txt   text eol=lf
+*.html  text eol=lf
+
+*.pptx  binary
+*.pdf   binary
+*.npz   binary
+*.pt    binary
+*.png   binary
+*.mp4   binary

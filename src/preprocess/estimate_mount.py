@@ -1,12 +1,7 @@
-"""Estimate the full mounting rotation per recording and sensor.
-
-The resting posture alone is not enough: there gravity points along the bone,
-which fixes one axis but not the rotation about it. Because a video exists for
-every recording, an anatomical frame of the segment can be built from the pose
-at every instant (y along the bone, x the flexion axis of the joint). Gravity is
-known in that frame, and the accelerometer measures the same direction in the
-device frame. Thousands of paired directions determine the rotation uniquely
-(Kabsch). The residual indicates how reliable it is.
+"""Mounting rotation per recording and sensor, by Kabsch fit.
+Pairs the gravity direction in the anatomical frame (from the pose) with the
+one in the device frame (from the accelerometer) over the whole recording. The
+residual says how reliable the fit is.
 
     python estimate_mount.py data/processed/video1 [--lag 0.10]
 """
@@ -21,7 +16,7 @@ SENSORS = ["left_wrist", "right_wrist", "left_ankle", "right_ankle"]
 # sensor -> (proximal, middle, distal joint) in MediaPipe indices
 CHAIN = {"left_wrist": (11, 13, 15), "right_wrist": (12, 14, 16),
          "left_ankle": (23, 25, 27), "right_ankle": (24, 26, 28)}
-UP_WORLD = np.array([0.0, -1.0, 0.0])       # MediaPipe: y zeigt nach unten
+UP_WORLD = np.array([0.0, -1.0, 0.0])       # MediaPipe: +y is down
 
 
 def lowpass(x, fs, cutoff):
@@ -135,7 +130,7 @@ def main():
                   f"{v['halves_deg']:7.1f} deg")
     if a.out:
         Path(a.out).write_text(json.dumps(allres, indent=2))
-        print(f"\ngeschrieben: {a.out}")
+        print(f"\nwritten: {a.out}")
 
 
 if __name__ == "__main__":

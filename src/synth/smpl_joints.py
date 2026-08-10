@@ -1,10 +1,6 @@
-"""SMPL-H joint positions from pose parameters, in numpy only.
+"""SMPL-H joint positions from pose parameters, numpy only.
 
-The usual route is smplx and therefore PyTorch, which is not needed here: joint
-positions require neither the surface mesh nor the blend weights, only
-J_regressor (52 joints from the 6890 rest vertices) and kintree_table. What
-remains is the standard chain - rest pose, per-joint rotation from the axis-angle
-vector, then propagation outward from the pelvis.
+Needs J_regressor and kintree_table, not the mesh or blend weights.
 """
 from pathlib import Path
 
@@ -38,7 +34,7 @@ def find_model(root) -> tuple:
     raise SystemExit(
         f"No SMPL-H body model found under {root}.\n"
         f"Expected a model.npz with J_regressor, v_template and "
-        f"kintree_table, z.B. unter {root}/neutral/model.npz")
+        f"kintree_table, e.g. at {root}/neutral/model.npz")
 
 
 def _rodrigues(rv: np.ndarray) -> np.ndarray:
@@ -89,7 +85,7 @@ class BodyModel:
             a[int(np.argmin(np.abs(u)))] = 1.0
             x = np.cross(u, a)
             x /= np.linalg.norm(x) + 1e-12
-            out[j] = np.stack([x, u, np.cross(x, u)], axis=1)   # rechtshaendig
+            out[j] = np.stack([x, u, np.cross(x, u)], axis=1)   # right-handed
         return out
 
     def joints(self, poses: np.ndarray, trans=None, betas=None,

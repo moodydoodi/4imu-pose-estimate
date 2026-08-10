@@ -1,8 +1,5 @@
-"""Compare synthetic and real recordings in the 48 model input features.
-
-Reports, per feature, the quantile distance between the synthetic distribution
-and each real recording, expressed in standard deviations.
-"""
+"""Quantile distance between synthetic and real data, per model input feature,
+in standard deviations."""
 import argparse
 import csv
 import json
@@ -64,7 +61,7 @@ def main():
             for fi, feature in enumerate(NAMES):
                 rows.append({"recording": rp.name, "sensor": sensor, "feature": feature,
                              "quantile_distance_std": float(d[si * 12 + fi])})
-    if not rows: raise SystemExit("Keine lesbaren Realrecordings.")
+    if not rows: raise SystemExit("No readable real recordings.")
     report["median_distance_per_feature"] = np.median(
         [report["real"][n]["quantile_distance"] for n in report["real"]], axis=0).tolist()
     out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)

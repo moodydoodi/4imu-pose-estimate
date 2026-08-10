@@ -1,16 +1,12 @@
-"""
-inference.py - run a trained model on one recording and write dashboard files.
+"""Run a checkpoint on one recording and write the dashboard files.
 
-Writes, next to the recording:
+Writes next to the recording: predictions__<name>.csv, its .topology.json and
+metrics__<name>.json. The architecture is read from the checkpoint, not from
+its file name, so several model families can be run from the dashboard.
 
-    predictions__<name>.csv            t, j0_x .. jN_z
-    predictions__<name>.topology.json  skeleton used to draw the bones
-    metrics__<name>.json               MPJPE, PA-MPJPE, PCK, per-joint error
-
-The architecture is read from the checkpoint itself rather than from its file
-name, so several model families can be run interchangeably from the dashboard.
-For checkpoints produced by src/poser the feature computation of that package is
-imported directly, so there is only ever one implementation of the model.
+NOTE: only the src/poser branch belongs to this project. The ST-GCN and
+transformer branches load a second model family that was developed in parallel
+and is out of scope here; those paths are incomplete.
 
     python inference.py --subject video1 --checkpoint models/finetune/best_video1.pt
 """
@@ -24,19 +20,19 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-# --- Model input CONFIG (matches the colleague's real code, confirmed) ------
+# --- Model input config for the external ST-GCN family ---------------------
 # Sensor order MUST match training: Wrist L, Wrist R, Ankle L, Ankle R,
 # and within each sensor the channel order is [acc_x,acc_y,acc_z, gyr_x,gyr_y,gyr_z].
 SENSOR_ORDER = ["left_wrist", "right_wrist", "left_ankle", "right_ankle"]
 ACC_COLS = ["x", "y", "z"]          # after aliasing acc_x/acc_y/acc_z -> x/y/z
 GYRO_COLS = ["gx", "gy", "gz"]      # after aliasing gyr_x/gyr_y/gyr_z -> gx/gy/gz
-# His aligned CSVs already carry raw acc + gyro (t,acc_x..gyr_z). NO unit scaling
-# and NO external normalisation: his models self-normalise (in-model LayerNorm).
+# The aligned CSVs carry raw acc and gyro. No unit scaling and no external
+# normalisation: these models normalise internally.
 G_TO_MS2 = 1.0            # raw units go straight in (set only if a model needs scaling)
-ACCEL_ONLY = False       # his input is 24 channels = 4 sensors × [acc(3)+gyro(3)]
+ACCEL_ONLY = False       # 24 channels = 4 sensors x [acc(3) + gyro(3)]
 N_JOINTS = 33
 IN_CHANNELS = 3 * len(SENSOR_ORDER) * (1 if ACCEL_ONLY else 2)   # 24
-# His aligned/mp_spatial column aliases -> our canonical short names.
+# Column aliases -> canonical short names.
 IMU_ALIASES = {"acc_x": "x", "acc_y": "y", "acc_z": "z",
                "gyr_x": "gx", "gyr_y": "gy", "gyr_z": "gz",
                "gyro_x": "gx", "gyro_y": "gy", "gyro_z": "gz", "time": "t"}
@@ -70,8 +66,7 @@ def _read_aligned(path: Path) -> pd.DataFrame:
 
 
 def _nearest_resample(src_t: np.ndarray, values: np.ndarray, target_t: np.ndarray) -> np.ndarray:
-    """Pick, for each target time, the source row with the nearest timestamp —
-    the numpy equivalent of the colleague's pd.merge_asof(direction='nearest')."""
+    """Nearest-timestamp resampling, the numpy equivalent of merge_asof."""
     idx = np.searchsorted(src_t, target_t)
     idx = np.clip(idx, 1, len(src_t) - 1)
     left = src_t[idx - 1]
@@ -83,14 +78,10 @@ def _nearest_resample(src_t: np.ndarray, values: np.ndarray, target_t: np.ndarra
 def load_sensor_matrix(folder: Path, accel_only: bool = ACCEL_ONLY,
                        g_to_ms2: float = G_TO_MS2, gt_times: np.ndarray = None,
                        sensor_suffix: str = "_aligned"):
-    """
-    Build the model input X in fixed sensor order (per-sensor [acc(3),gyro(3)]).
-    Reads <sensor>_aligned.csv, aliasing acc_*/gyr_* -> x/y/z, gx/gy/gz.
-      accel_only=False -> X shape (T, 24)   [his real contract]
-      accel_only=True  -> X shape (T, 12)   (accel only)
-    If gt_times is given, every sensor is resampled onto the GT frame timeline
-    (nearest) — mirrors his merge_asof so dt matches the ~50 Hz training rate.
-    Returns (X, t, dt): t = time axis, dt = per-frame delta time (ST-GCN channel).
+    """-> (X (T,24) or (T,12) if accel_only, time axis, per-frame dt).
+
+    Reads <sensor>_aligned.csv in fixed sensor order. With gt_times given,
+    every sensor is resampled onto the ground-truth timeline.
     """
     raw, raw_t = {}, {}
     for joint in SENSOR_ORDER:
@@ -123,9 +114,7 @@ def load_sensor_matrix(folder: Path, accel_only: bool = ACCEL_ONLY,
 
 
 def build_stgcn_input(X: np.ndarray, dt: np.ndarray):
-    """Shape the (T,24) accel+gyro matrix into the colleague's ST-GCN inputs:
-    acc_gyr (1, T, 4, 6) and dt (1, T). His IMUFeatureExtractor expands the 24
-    raw channels to the 83 engineered features INSIDE the model."""
+    """(T,24) -> ST-GCN inputs acc_gyr (1,T,4,6) and dt (1,T)."""
     T = X.shape[0]
     acc_gyr = X.reshape(T, len(SENSOR_ORDER), 6)[None]            # (1, T, 4, 6)
     return acc_gyr, dt[None]                                      # (1, T, 4, 6), (1, T)
@@ -135,14 +124,10 @@ def build_stgcn_input(X: np.ndarray, dt: np.ndarray):
 # Dynamic model spec — read hyperparameters from the checkpoint path
 # ---------------------------------------------------------------------------
 class ModelSpec:
-    """Hyperparameters of a checkpoint. They are read from the checkpoint's own
-    weight shapes whenever possible (works for folders like 'autotune_loss_v8' or
-    'kinematics_v2' that carry no parameters in their name) and only fall back to
-    parsing a name like 'win300_str50_hid128_lay4_aw0.05_cw0.01_ac0.005'.
+    """Hyperparameters of a checkpoint, read from the weight shapes where possible
+    and otherwise parsed from the folder name.
 
-    Attributes: window, stride, hidden_dim, num_layers, n_joints, input_dim, arch.
-    `n_joints` is the model's internal node count (34 = 33 MediaPipe + virtual
-    pelvis, 13 = culled topology); `out_joints` is what it actually writes out."""
+    n_joints is the internal node count, out_joints what is written out."""
     def __init__(self, path, introspect=True):
         import re
         self.path = Path(path)
@@ -182,23 +167,20 @@ class ModelSpec:
                     self.arch = "poser"
                     self.window = 200
                     self.card = _poser_card(self.path)
-                    # One run writes one checkpoint per test recording; the
-                    # file name has to be part of the model name so the folds
-                    # do not overwrite each other.
+                    # One checkpoint per test recording, so the file name has
+                    # to be part of the model name.
                     stem = self.path.stem
                     if stem not in ("best", "best_model"):
                         self.name = f"{self.path.parent.name}__{stem}"
                 elif self.n_joints is not None:
                     self.arch = "stgcn"
-                # the window length is not encoded in the weights; fall back to the
-                # default each trainer uses when the folder name does not say
+                # window length is not in the weights, fall back to the default
                 if not re.search(r"win(\d+)", name):
                     self.window = {"fk13": 100, "kin13": 300}.get(self.variant, self.window)
 
     @property
     def out_joints(self):
-        """Joints in the written prediction: the 34-node model drops the virtual
-        pelvis and writes 33; the culled family writes all 13."""
+        """-> number of joints written out (33 or 13)."""
         if self.n_joints is None:
             return N_JOINTS
         return N_JOINTS if self.n_joints >= 34 else self.n_joints
@@ -211,8 +193,7 @@ class ModelSpec:
 
 
 # ---------------------------------------------------------------------------
-# Dynamic model introspection — read the architecture from the checkpoint itself
-# instead of trusting the file name. Works for every family in models/.
+# Read the architecture from the checkpoint instead of the file name.
 # ---------------------------------------------------------------------------
 def _state_dict(obj):
     if isinstance(obj, dict):
@@ -222,8 +203,7 @@ def _state_dict(obj):
     return obj
 
 def inspect_checkpoint(checkpoint):
-    """Derive (input_dim, hidden_dim, num_layers, n_joints) from the weight shapes.
-    Returns a dict; every value may be None if it cannot be determined."""
+    """-> dict of input_dim, hidden_dim, num_layers, n_joints; values may be None."""
     try:
         import torch                      # inside the try: without torch we simply
         sd = _state_dict(torch.load(checkpoint, map_location="cpu"))   # fall back to the name
@@ -237,8 +217,6 @@ def inspect_checkpoint(checkpoint):
     shp = {k: tuple(v.shape) for k, v in sd.items() if hasattr(v, "shape")}
 
     # ---- poser (src/poser/model.py) -------------------------------------
-    # Conv stem, two BiLSTM stages, two heads. Without this branch the file
-    # falls through to the gru/lstm branch and load_state_dict fails.
     if "inorm.weight" in shp and "rnn1.weight_hh_l0" in shp:
         return {
             "variant": "poser",
@@ -275,10 +253,8 @@ def inspect_checkpoint(checkpoint):
         n_joints = gp[0] // hidden
     info["hidden_dim"], info["n_joints"] = hidden, n_joints
 
-    # which trainer built this checkpoint?  the key names give it away:
-    #   kin13 = 04_train_kinematics_*  (KinematicHeads -> 'heads.*', DifferentiableFK -> fk.B/fk.L)
-    #   fk13  = 04_train_pose_model.py (flat fc_root, ForwardKinematics -> fk.offsets)
-    #   mp34  = 04_train_pose_model_ST-GCN_v6-*  (34 nodes)
+    # Which trainer built this checkpoint, from the key names:
+    #   kin13 = kinematics trainer, fk13 = pose-model trainer, mp34 = ST-GCN
     keys = set(shp)
     if any(k.startswith("heads.") for k in keys) or "fk.B" in keys:
         info["variant"] = "kin13"
@@ -290,8 +266,7 @@ def inspect_checkpoint(checkpoint):
 
 
 def _poser_card(checkpoint):
-    """Read model_card.json next to the checkpoint: which sensor files and which
-    reference frame the model was trained on."""
+    """-> model_card.json next to the checkpoint: suffix, frame, fps."""
     for c in (Path(checkpoint).parent / "model_card.json",
               Path(checkpoint).with_suffix(".card.json")):
         if c.exists():
@@ -303,8 +278,7 @@ def _poser_card(checkpoint):
 
 
 def _import_poser(root=None):
-    """Locate and import the poser package. It is not copied, so there is only
-    ever one version of the model."""
+    """Import the poser package from the repository, without copying it."""
     import importlib, sys
     cands = []
     if root:
@@ -327,15 +301,10 @@ def _import_poser(root=None):
 
 
 def run_poser_inference(folder, checkpoint, spec, progress=None, root=None):
-    """Apply a poser model to a recording folder.
+    """-> (prediction (T,13,3) in the world frame, times, info).
 
-    Returns (pred (T,13,3) in the WORLD frame, times, extra info).
-
-    A body-frame model predicts the pose without heading, which four limb
-    sensors without a magnetometer cannot observe. For display next to the video
-    the heading is taken from the ground truth. That changes no error figure,
-    since both sides are rotated by the same matrix, but it is recorded as
-    heading_from_gt.
+    Body-frame models are rotated back with the ground-truth heading, recorded
+    as heading_from_gt. No error figure changes.
     """
     M = _import_poser(root)
     card = spec.card or {}
@@ -382,7 +351,7 @@ def _cuda():
 
 
 def source_variant(path):
-    """Same classification for one of the colleague's training scripts."""
+    """Same classification, for an external training script."""
     try:
         txt = Path(path).read_text(encoding="utf-8", errors="ignore")
     except Exception:
@@ -408,7 +377,7 @@ def source_parents(path):
 
 
 def source_target_joints(path):
-    """TARGET_JOINTS declared in one of the colleague's training scripts."""
+    """-> TARGET_JOINTS declared in an external training script."""
     import re
     try:
         m = re.search(r"^TARGET_JOINTS\s*=\s*(\d+)", Path(path).read_text(encoding="utf-8", errors="ignore"), re.M)
@@ -418,7 +387,7 @@ def source_target_joints(path):
 
 
 def load_ground_truth(folder: Path):
-    # our name, or the colleague's <video>_gt_3d.csv
+    # our name, or <video>_gt_3d.csv
     cands = ([folder / "ground_truth_3d.csv"]
              + sorted(folder.glob("*gt_3d*.csv")) + sorted(folder.glob("ground_truth*.csv")))
     path = next((p for p in cands if p.exists()), None)
@@ -469,8 +438,7 @@ PARENTS_13 = [0, 0, 1, 2, 0, 4, 5, 0, 7, 8, 0, 10, 11]
 CONNECTIONS_13 = [(p, i) for i, p in enumerate(PARENTS_13) if i != 0]
 
 def cull_to_13(mat: np.ndarray) -> np.ndarray:
-    """(T,33,3) MediaPipe -> (T,13,3): virtual pelvis + the 12 culled joints,
-    exactly the topology the colleague's 13-node models are trained on."""
+    """(T,33,3) MediaPipe -> (T,13,3): virtual pelvis plus the 12 culled joints."""
     pelvis = (mat[:, 23, :] + mat[:, 24, :]) / 2.0
     return np.concatenate([pelvis[:, None, :], mat[:, ORIGINAL_MP_INDICES, :]], axis=1)
 
@@ -541,11 +509,11 @@ def write_metrics(folder: Path, metrics: dict, model_name=None):
 # DEMO prediction (no trained model required)
 # ---------------------------------------------------------------------------
 def demo_predictions(gt_mat: np.ndarray, seed: int = 7) -> np.ndarray:
-    """Ground Truth + temporally-smooth per-joint noise. Placeholder only."""
+    """Ground truth plus smooth per-joint noise. Placeholder, no model needed."""
     rng = np.random.default_rng(seed)
     t, j, c = gt_mat.shape
     base = np.full(j, 0.09)
-    for idx in (15, 16, 27, 28, 13, 14, 25, 26):  # joints near a sensor -> easier
+    for idx in (15, 16, 27, 28, 13, 14, 25, 26):  # joints near a sensor
         base[idx] = 0.045
     noise = rng.standard_normal((t, j, c)) * base[None, :, None]
     if t > 5:
@@ -557,20 +525,12 @@ def demo_predictions(gt_mat: np.ndarray, seed: int = 7) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Real model (fill in). Kept import-optional so --demo runs without torch.
+# Fallback architectures. Import-optional so --demo runs without torch.
 # ---------------------------------------------------------------------------
 def build_model(arch: str, in_dim: int = IN_CHANNELS, out_dim: int = N_JOINTS * 3, window: int = 64):
-    """
-    >>> REPLACE THIS with the colleague's model class when his repo arrives. <<<
-    Steps: (1) copy his model definition next to this file, (2) import it here,
-    (3) instantiate with the SAME hyperparameters he trained with, (4) return it.
-    The checkpoint itself is loaded in main() via load_state_dict.
+    """Generic fallback architectures mapping (B, window, in_dim) -> (B, 99).
 
-    Until then these skeletons map (batch, window, in_dim) -> (batch, 99):
-      - transformer : encoder over the window, take the last token  [his model]
-      - TCN         : temporal conv stack over the window
-      - LSTM / GRU  : recurrent over the window, take the last state
-      - GCN         : graph conv over the skeleton adjacency (TODO)
+    Only used for the external model family; GCN is not implemented.
     """
     import torch                      # noqa: F401  (only needed for the real path)
     import torch.nn as nn
@@ -585,7 +545,7 @@ def build_model(arch: str, in_dim: int = IN_CHANNELS, out_dim: int = N_JOINTS * 
 
         def forward(self, x):                     # x: (B, window, in_dim)
             h = self.encoder(self.proj(x))
-            return self.head(h[:, -1])            # (B, 99)  -> TODO: FK head if he uses angles
+            return self.head(h[:, -1])            # (B, 99)
 
     class TCNBlock(nn.Module):
         def __init__(self, ch, k=3, d=1):
@@ -608,7 +568,7 @@ def build_model(arch: str, in_dim: int = IN_CHANNELS, out_dim: int = N_JOINTS * 
         def forward(self, x):                     # x: (B, window, 24)
             h = self.inp(x.transpose(1, 2))
             h = self.blocks(h)[..., -1]           # last timestep
-            return self.head(h)                   # (B, 99)  -> TODO: FK head
+            return self.head(h)                   # (B, 99)
 
     class RNN(nn.Module):
         def __init__(self, cell):
@@ -629,15 +589,11 @@ def build_model(arch: str, in_dim: int = IN_CHANNELS, out_dim: int = N_JOINTS * 
         return RNN(nn.LSTM)
     if arch == "gru":
         return RNN(nn.GRU)
-    raise NotImplementedError(f"Architecture '{arch}' not implemented yet (GCN is a TODO).")
+    raise NotImplementedError(f"Architecture '{arch}' is not implemented.")
 
 
 def custom_loss(pred, target):
-    """
-    Weighted loss from the project doc:
-        L = λ1·L_position (SmoothL1) + λ2·L_bone + λ3·L_angle
-    pred/target: (B, 33, 3) tensors. TODO: tune λ and add anatomical angle limits.
-    """
+    """Weighted position and bone loss on (B,33,3) tensors."""
     import torch
     import torch.nn.functional as F
     l_pos = F.smooth_l1_loss(pred, target)
@@ -647,14 +603,12 @@ def custom_loss(pred, target):
         lg = torch.linalg.norm(target[:, a] - target[:, b], dim=-1)
         bone = bone + F.l1_loss(lp, lg)
     l_bone = bone / len(MEDIAPIPE_POSE_CONNECTIONS)
-    return 0.62 * l_pos + 0.24 * l_bone            # + 0.14 * l_angle (TODO)
+    return 0.62 * l_pos + 0.24 * l_bone
 
 
 def run_model_inference(model, X: np.ndarray, window: int = 64,
                         batch: int = 256, stride: int = 1, progress=None) -> np.ndarray:
-    """Slide a window over X and predict a pose per frame. Returns (T, 33, 3).
-    For our own skeletons (GRU/transformer/…) whose forward is model(x)->(B,99).
-    Batched + optional stride + progress callback (same contract as ST-GCN)."""
+    """Windowed inference for the fallback architectures. -> (T, 33, 3)."""
     import torch
     _threads(); model.eval()
     T = X.shape[0]
@@ -684,9 +638,7 @@ def run_model_inference(model, X: np.ndarray, window: int = 64,
 
 
 def import_model_class(model_src: str, class_name: str = "TemporalPoseNetwork"):
-    """Dynamically import the colleague's model class from one of his .py files
-    (e.g. scripts/04_train_pose_model_ST-GCN_v6-3.py). Keeps us decoupled: when he
-    changes the architecture we just repoint --model-src, no code duplication."""
+    """Import an external model class from a .py file given by --model-src."""
     import importlib.util
     p = Path(model_src)
     if not p.exists():
@@ -700,7 +652,7 @@ def import_model_class(model_src: str, class_name: str = "TemporalPoseNetwork"):
 
 
 def import_model_module(model_src: str):
-    """The whole trainer module (needed for PARENTS_13 and friends)."""
+    """-> the imported trainer module."""
     import importlib.util
     p = Path(model_src)
     if not p.exists():
@@ -711,11 +663,8 @@ def import_model_module(model_src: str):
     return mod
 
 
-def build_colleague_model(model_src, spec):
-    """Instantiate the right TemporalPoseNetwork for this checkpoint. The three
-    trainer variants have different constructor signatures, so we branch on the
-    variant detected from the checkpoint's own weights.
-    Returns (model, parents_or_None)."""
+def build_external_model(model_src, spec):
+    """-> (model, parents or None). Branches on the variant found in the weights."""
     import torch
     mod = import_model_module(model_src)
     Cls = getattr(mod, "TemporalPoseNetwork")
@@ -744,9 +693,7 @@ def _threads():
         pass
 
 def pick_device():
-    """Pick the best available torch device automatically: CUDA GPU if present,
-    else Apple MPS, else CPU. Used everywhere so the same code runs on a laptop
-    or a GPU box (via SSH) without changes."""
+    """-> CUDA if present, else MPS, else CPU."""
     import torch
     try:
         if torch.cuda.is_available():
@@ -759,8 +706,7 @@ def pick_device():
     return torch.device("cpu")
 
 def device_info():
-    """Human-readable device string, e.g. 'cuda: NVIDIA RTX 4090' or 'cpu'.
-    Never raises — returns 'torch missing' when torch is not installed."""
+    """-> device description, or 'torch missing'. Never raises."""
     try:
         import torch
         d = pick_device()
@@ -773,8 +719,7 @@ def device_info():
         return "cpu"
 
 def _fill_gaps(preds: np.ndarray):
-    """Linear-interpolate frames left as NaN (warm-up + strided gaps) so the output
-    is dense. np.interp clamps at the ends, so warm-up frames take the first value."""
+    """Fill NaN frames from warm-up and striding by linear interpolation."""
     T = preds.shape[0]
     valid = ~np.isnan(preds[:, 0, 0])
     vi = np.where(valid)[0]
@@ -788,11 +733,7 @@ def _fill_gaps(preds: np.ndarray):
 def run_stgcn_inference(model, X: np.ndarray, dt: np.ndarray, window: int,
                         batch: int = 256, stride: int = 1, progress=None,
                         out_joints: int = N_JOINTS) -> np.ndarray:
-    """Windowed inference for the colleague's ST-GCN: forward is
-    model(acc_gyr (B,win,4,6), dt (B,win)) -> (pos_3d (B,win,34,3), features).
-    Windows are run in BATCHES (huge speedup vs one-at-a-time). `stride` skips
-    frames (interpolated afterwards) for a fast preview. `progress(done,total)`
-    is called after every batch. Drops the virtual pelvis (joint 33)."""
+    """Batched windowed inference for the external ST-GCN. Drops joint 33."""
     import torch
     _threads(); model.eval()
     T = X.shape[0]
@@ -810,7 +751,7 @@ def run_stgcn_inference(model, X: np.ndarray, dt: np.ndarray, window: int,
             d = torch.from_numpy(np.stack([dtf[i - window:i] for i in chunk])).to(dev)           # (B,win)
             out = model(ag, d)
             pos = out[0] if isinstance(out, (tuple, list)) else out                      # (B,win,34,3)
-            p = pos[:, -1, :out_joints, :].cpu().numpy()   # 34-node model -> drop virtual pelvis
+            p = pos[:, -1, :out_joints, :].cpu().numpy()   # drop the virtual pelvis
             for k, i in enumerate(chunk):
                 preds[i] = p[k]
             done += len(chunk)
@@ -831,10 +772,7 @@ _SKIP_NAME_TOKENS = ("cache", "dataset", "scaler", "stats", "optimizer", "optim_
                      "features", "buffer")
 
 def _is_intact_archive(p: Path) -> bool:
-    """A modern torch checkpoint is a zip. If the file starts like a zip but has no
-    central directory it was written only partially -> torch.load would raise
-    'PytorchStreamReader failed reading zip archive'. Older (legacy) saves are not
-    zips at all, so those are passed through and left to torch."""
+    """False for a truncated zip checkpoint. Legacy non-zip saves pass through."""
     import zipfile
     try:
         with open(p, "rb") as f:
@@ -846,8 +784,7 @@ def _is_intact_archive(p: Path) -> bool:
     return True
 
 def _looks_like_checkpoint(p: Path) -> bool:
-    """Filter out non-model files: env path-files (*.pth from setuptools), dataset
-    caches, truncated archives and anything inside a virtualenv / .git tree."""
+    """Drop non-model files: path-files, dataset caches, truncated archives, venvs."""
     if any(part in _SKIP_DIRS for part in p.parts):
         return False
     n = p.name.lower()
@@ -859,7 +796,7 @@ def _looks_like_checkpoint(p: Path) -> bool:
     if p.suffix.lower() == ".pth":
         if n in _SKIP_PTH or n.endswith("-precedence.pth") or n.endswith("-nspkg.pth"):
             return False
-        # real torch checkpoints are binary + sizeable; path-files are tiny text
+        # real checkpoints are binary and sizeable, path-files are tiny text
         try:
             if p.stat().st_size < 2048:
                 return False
@@ -868,16 +805,14 @@ def _looks_like_checkpoint(p: Path) -> bool:
     return True
 
 def list_checkpoints(root):
-    """Find every checkpoint under a folder and read its hyperparameters from the
-    name. Returns [(path, ModelSpec)] sorted by name. Lets the dashboard show and
-    run any model interchangeably. Skips venv/site-packages and stray *.pth files."""
+    """-> [(path, ModelSpec)] for every checkpoint under a folder, sorted by name."""
     root = Path(root)
     if not root.exists():
         return []
     pts = sorted(p for p in (list(root.rglob("*.pt")) + list(root.rglob("*.pth")))
                  if _looks_like_checkpoint(p))
     out = []
-    for p in pts:                      # one unreadable checkpoint must not kill the scan
+    for p in pts:                      # one bad checkpoint must not kill the scan
         try:
             out.append((p, ModelSpec(p)))
         except Exception as e:
@@ -886,9 +821,7 @@ def list_checkpoints(root):
 
 
 def find_model_sources(root):
-    """Scan a project root for .py files that define the model class, so the
-    dashboard can auto-resolve the class for a checkpoint (no manual path).
-    Returns [(path, arch)] where arch is 'stgcn' or 'gru'."""
+    """-> [(path, arch)] for .py files defining a model class."""
     root = Path(root)
     out = []
     if not root.exists():
@@ -909,15 +842,12 @@ def find_model_sources(root):
 
 
 def source_joint_map(root):
-    """{source .py -> TARGET_JOINTS} so a checkpoint can be matched to the trainer
-    that defines the same topology (13 culled vs 33/34 MediaPipe)."""
+    """-> {source .py: TARGET_JOINTS}, to match a checkpoint to its trainer."""
     return {str(p): source_target_joints(p) for p, _ in find_model_sources(root)}
 
 
 def resolve_model_src(checkpoint, sources):
-    """Pick the best model-class .py for a checkpoint from find_model_sources():
-    match architecture, then prefer a filename whose version matches the checkpoint
-    path (e.g. a checkpoint under 'sweep_v6.3' → a '...v6-3.py' trainer)."""
+    """-> the model-class .py matching a checkpoint: architecture, then version."""
     import re
     spec = checkpoint if isinstance(checkpoint, ModelSpec) else ModelSpec(checkpoint)
     cands = [p for p, a in sources if a == spec.arch]
@@ -925,8 +855,7 @@ def resolve_model_src(checkpoint, sources):
         cands = [p for p, _ in sources]
     if not cands:
         return None
-    # first filter: the trainer must be the same variant as the weights
-    # (kin13 / fk13 both use 13 joints but have different classes and signatures)
+    # the trainer must be the same variant as the weights
     if spec.variant:
         matched = [p for p in cands if source_variant(p) == spec.variant]
         if matched:
@@ -951,7 +880,7 @@ def resolve_model_src(checkpoint, sources):
 
 
 def _load_checkpoint_state(checkpoint):
-    """torch.load with a message a human can act on."""
+    """torch.load with a readable error message."""
     import torch
     try:
         return torch.load(checkpoint, map_location="cpu")
@@ -965,10 +894,8 @@ def _load_checkpoint_state(checkpoint):
 
 def infer_to_files(folder, checkpoint, model_src=None, arch="auto", window=0,
                    model_name=None, gt_df=None, write=True, progress=None, stride=1, batch=256):
-    """Run a trained model on one subject folder and (optionally) write
-    predictions__<name>.csv + metrics__<name>.json. Returns (model_name, pred_mat,
-    metrics). Reused by main() and by the dashboard's in-app 'Run model' button.
-    Requires torch + (for ST-GCN) model_src pointing at the class definition."""
+    """-> (model name, predictions, metrics). Writes the dashboard files unless
+    told otherwise. Used by main() and by the dashboard."""
     import torch
     folder = Path(folder)
     if gt_df is None:
@@ -977,8 +904,7 @@ def infer_to_files(folder, checkpoint, model_src=None, arch="auto", window=0,
     arch = spec.arch if arch == "auto" else arch
     window = window or spec.window
 
-    # poser computes its own features (complementary filter, impact band,
-    # 50 Hz) and reads the pose itself, so it does not use load_sensor_matrix.
+    # poser computes its own features and reads the pose itself
     if arch == "poser":
         P, times, extra = run_poser_inference(folder, checkpoint, spec,
                                               progress=progress)
@@ -1008,7 +934,7 @@ def infer_to_files(folder, checkpoint, model_src=None, arch="auto", window=0,
         if not model_src:
             raise ValueError("ST-GCN needs model_src pointing at the .py that defines "
                              "TemporalPoseNetwork (e.g. 04_train_pose_model_ST-GCN_v6-3.py).")
-        model, parents = build_colleague_model(model_src, spec)
+        model, parents = build_external_model(model_src, spec)
         model.load_state_dict(_load_checkpoint_state(checkpoint))
         model.to(pick_device())
         pred_mat = run_stgcn_inference(model, X, dt, window=window, batch=batch,
@@ -1046,9 +972,7 @@ JOINT_NAMES_13 = ["pelvis", "left hip", "left knee", "left ankle", "right hip", 
                   "right shoulder", "right elbow", "right wrist"]
 
 def write_topology(folder, model_name, n_joints, parents=None):
-    """Sidecar next to predictions__<name>.csv describing the skeleton, so the
-    dashboard draws the correct bones and measures the correct segments
-    (the kinematics trainer hangs the shoulders off the hips, not the pelvis)."""
+    """Write the topology sidecar so the dashboard draws the correct bones."""
     if n_joints != 13:
         return None
     if not parents or len(parents) != 13:
@@ -1076,7 +1000,7 @@ def main():
     ap.add_argument("--checkpoint", default=None,
                     help="Path to a trained model .pt (e.g. sweep_v6.3/<hp>/best_model.pt).")
     ap.add_argument("--model-src", default=None,
-                    help="Path to the colleague's .py that defines TemporalPoseNetwork "
+                    help="path to the .py defining TemporalPoseNetwork "
                          "(e.g. scripts/04_train_pose_model_ST-GCN_v6-3.py). Required for --arch stgcn.")
     ap.add_argument("--model-name", default=None,
                     help="Label for this model. Writes predictions__<name>.csv + metrics__<name>.json "

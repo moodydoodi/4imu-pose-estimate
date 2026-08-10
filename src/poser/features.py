@@ -1,24 +1,4 @@
-"""Feature extraction from raw accelerometer and gyroscope signals.
-
-The AX6 has no magnetometer, so rotation about the gravity axis is not
-observable and drifts with the gyroscope integral. Feeding an estimated
-orientation into the network would mean training on a quantity that drifts away
-at inference time. What is observable:
-
-  * the gravity direction in the sensor frame, drift free because the
-    accelerometer keeps correcting it (two of three orientation degrees),
-  * linear acceleration, i.e. acc minus gravity,
-  * angular rate.
-
-Gravity is tracked with a complementary filter (Mahony without the magnetometer
-branch): the gyroscope carries it forward, the accelerometer pulls it back, but
-only while the magnitude is close to 1 g. During a jump it is not, so the
-gyroscope carries alone through the flight phase.
-
-One extra channel: the pose runs at about 50 fps, so everything is resampled to
-50 Hz and the landing impact (20-90 Hz) would be lost. Its energy is therefore
-measured at the full rate and carried as its own channel.
-"""
+"""12 input features per sensor from raw accelerometer and gyroscope."""
 import numpy as np
 from scipy import signal
 

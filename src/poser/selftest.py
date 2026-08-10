@@ -1,8 +1,6 @@
-"""Data checks before training. Does not require torch.
-
-Verifies that the skeleton is complete and plausible, that the parameterisation
-reproduces the pose exactly, what the rigid-skeleton floor is, that the features
-are finite and correctly scaled, and that sensors and pose are time aligned.
+"""Sanity checks on the cache before training.
+Checks the skeleton, the parameterisation error, the rigid-skeleton floor, the
+feature scaling and the sensor/pose time alignment.
 
     python selftest.py --cache cache/real_body --skeleton config/skeleton.json
 """
@@ -16,9 +14,7 @@ from config import FEAT_PER_SENSOR, JOINT_NAMES, LEAF_JOINTS, SENSORS
 
 
 def lag_check(X, Y, fps, max_lag=1.0):
-    """Coarse check on the time offset: impact energy at the ankle must
-    coincide with the acceleration of the same joint in the pose. More than
-    about 0.1 s indicates a synchronisation problem."""
+    """-> {sensor: (lag in s, peak correlation)}. Above 0.1 s is a problem."""
     best = {}
     for i, s in enumerate(SENSORS):
         hb = X[:, i * FEAT_PER_SENSOR + 11]
@@ -73,16 +69,6 @@ def main():
               f"{mean:12.1f}{gn:7.3f}{ratio:15.1f}{lag:11.2f}")
         if not np.isfinite(X).all():
             print("   WARNING: non-finite features")
-
-    print("\nHow to read this:")
-    print("  exact       must be ~0, otherwise the parameterisation does not fit the pose")
-    print("  floor       best a rigid canonical skeleton allows")
-    print("  mean pose   reachable without any model; anything above it is worthless")
-    print("  |g|         must be 1.000")
-    print("  ankle/wrist impact energy ratio; well above 1, otherwise the sensor")
-    print("              assignment is wrong")
-    print("  lag         seconds between sensor and pose; above 0.1 s indicates a")
-    print("              synchronisation problem")
 
 
 if __name__ == "__main__":

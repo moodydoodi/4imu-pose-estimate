@@ -33,15 +33,15 @@ def run(script, args, label):
     t0 = time.time()
     r = subprocess.run(cmd, cwd=str(C.HERE))
     if r.returncode != 0:
-        raise SystemExit(f"\n{label} abgebrochen (Rueckgabewert {r.returncode}). "
-                         f"Die Meldung darueber sagt, woran es lag.")
-    print(f"\n{label} fertig in {time.time()-t0:.1f} s")
+        raise SystemExit(f"\n{label} failed (exit code {r.returncode}). "
+                         f"The message above says why.")
+    print(f"\n{label} done in {time.time()-t0:.1f} s")
 
 
-# --------------------------------------------------------------------- Schritte
+# ---------------------------------------------------------------------- steps
 def step1_profile(recs: list[Path]):
     banner(1, "measure the noise profile from the real recordings")
-    print("Vorlagen: " + ", ".join(r.name for r in recs) + "\n")
+    print("sources: " + ", ".join(r.name for r in recs) + "\n")
     run("sensor_noise_profile.py",
         ["--subjects", *recs, "--out", C.PROFILE], "noise profile")
 
@@ -50,8 +50,7 @@ def step2_amass(limit, sample, max_seconds, fps, rec, selection, overwrite):
     banner(2, "convert AMASS sequences into the pose format")
     files = C.amass_files()
     if not files:
-        raise SystemExit(f"No AMASS files under {C.AMASS_DIR}. "
-                         f"Erst check_setup.py lesen.")
+        raise SystemExit(f"No AMASS files under {C.AMASS_DIR}. ")
     args = ["--amass", C.AMASS_DIR, "--body-model", C.MODEL_DIR,
             "--out", C.POSE_DIR, "--fps", fps, "--max-seconds", max_seconds]
     if rec is not None:
@@ -69,7 +68,7 @@ def step2_amass(limit, sample, max_seconds, fps, rec, selection, overwrite):
 
 def step3_synth(variants, seed0, jitter, root_amp, selection, overwrite,
                 foot_impacts=False):
-    banner(3, "Virtuelle AX6-Signale erzeugen")
+    banner(3, "generate virtuel ax6-data")
     if selection:
         entries = json.loads(Path(selection).read_text(encoding="utf-8"))["selected"]
         poses = [C.POSE_DIR / f"{e['output_stem']}.npz" for e in entries]
@@ -117,29 +116,27 @@ def step4_validate(rec: Path):
     if not made:
         raise SystemExit(f"No synthetic recordings under {C.REC_DIR}.")
     target = made[0]
-    print(f"echt: {rec.name}   synthetisch: {target.name}\n")
+    print(f"real: {rec.name}   synthetic: {target.name}\n")
     run("validate_synthetic.py",
         ["--real", rec, "--synth", target, "--out", C.REPORT_DIR], "validation")
-    print(f"\nDiagramme: {C.REPORT_DIR}")
-    print("Wichtig ist, dass Histogramm und Leistungsdichte grob uebereinander "
-          "liegen. Weichen sie stark ab, hilft --jitter-scale oder --root-amp.")
+    print(f"\nplots: {C.REPORT_DIR}")
 
 
 # --------------------------------------------------------------------- main
 def main():
-    ap = argparse.ArgumentParser(description="Synthetische AX6-Trainingsdaten erzeugen")
+    ap = argparse.ArgumentParser(description="generate synthetic ax6-data")
     ap.add_argument("--recording", default=None,
                     help="name or path of the real recording (default: the first found)")
     ap.add_argument("--limit", type=int, default=0, help="only the first N AMASS sequences")
     ap.add_argument("--sample", type=int, default=0,
                     help="N sequences spread evenly over all subjects")
     ap.add_argument("--selection", default=None,
-                    help="Manifest aus build_amass_manifest.py; selektiert auch Schritt 3 exakt")
+                    help="manifest from build_amass_manifest.py; also selects step 3")
     ap.add_argument("--profile-recordings", nargs="*", default=None,
                     help="recordings used for the noise profile bank")
-    ap.add_argument("--overwrite", action="store_true", help="bestehende Posen/Recordings ersetzen")
+    ap.add_argument("--overwrite", action="store_true", help="replace existing poses/recordings")
     ap.add_argument("--variants", type=int, default=1, help="noise variants per sequence")
-    ap.add_argument("--fps", type=float, default=120.0, help="Bildrate der Posen (AMASS nativ)")
+    ap.add_argument("--fps", type=float, default=120.0, help="pose frame rate (AMASS is 120 Hz)")
     ap.add_argument("--max-seconds", type=float, default=60.0, help="maximum length per sequence in seconds")
     ap.add_argument("--jitter-scale", type=float, default=1.0)
     ap.add_argument("--root-amp", type=float, default=0.10)
@@ -148,8 +145,8 @@ def main():
                          "synthesis falls about 20 percent short of the measured "
                          "peak acceleration at the ankle.")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--from", dest="start", type=int, default=1, help="ab Schritt N")
-    ap.add_argument("--only", type=int, default=0, help="nur Schritt N")
+    ap.add_argument("--from", dest="start", type=int, default=1, help="start at step N")
+    ap.add_argument("--only", type=int, default=0, help="run only step N")
     ap.add_argument("--skip-check", action="store_true")
     args = ap.parse_args()
 
@@ -159,8 +156,7 @@ def main():
     if not args.skip_check and 1 in steps:
         import check_setup
         if check_setup.main() != 0:
-            raise SystemExit("\nAbgebrochen. Erst die Punkte oben erledigen, "
-                             "dann noch einmal starten.")
+            raise SystemExit("\nStopped. Fix the points above, then run again.")
 
     # pick the reference recording
     rec = None
@@ -205,15 +201,11 @@ def main():
 
     print()
     print("=" * 74)
-    print(f"Durchlauf beendet in {(time.time()-t0)/60:.1f} min")
+    print(f"finished in {(time.time()-t0)/60:.1f} min")
     print(f"  noise profile : {C.PROFILE}")
-    print(f"  Posen        : {C.POSE_DIR}")
+    print(f"  poses         : {C.POSE_DIR}")
     print(f"  recordings    : {C.REC_DIR}")
     print(f"  report        : {C.REPORT_DIR}")
-    print()
-    print("Folders under output/recordings/ use the same layout as the real")
-    print("recordings (four sensor files plus *_gt_3d.csv) and can be dropped")
-    print("direkt neben data/processed/ ins Training legen.")
 
 
 if __name__ == "__main__":

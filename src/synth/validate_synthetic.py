@@ -21,7 +21,7 @@ def load(folder: Path, sensor: str, suffix: str):
 
 
 def welch_psd(x: np.ndarray, fs: float, nseg: int = 2048):
-    """Einfache Welch-Schaetzung ohne scipy."""
+    """Welch power spectral density, without scipy."""
     x = np.asarray(x, float)
     x = x - x.mean()
     if len(x) < nseg:
@@ -114,7 +114,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     report = {"real": args.real, "synth": args.synth, "sensors": {}}
 
-    hdr = f"{'Sensor':13s} {'Quelle':12s} {'|acc| med':>10s} {'|acc| p95':>10s} " \
+    hdr = f"{'sensor':13s} {'source':12s} {'|acc| med':>10s} {'|acc| p95':>10s} " \
           f"{'|gyr| med':>10s} {'|gyr| p95':>10s} {'acc noise':>11s} {'gyr noise':>11s}"
     print(hdr); print("-" * len(hdr))
     no_rest = set()
@@ -154,11 +154,9 @@ def main():
     bad = [s for s, v in report["sensors"].items()
            if not (0.7 < v["ratio_gyr_p95"] < 1.4)]
     if bad:
-        print("\nHinweis: bei " + ", ".join(bad) + " weicht die Bewegungsstaerke ab. "
-              "As long as the recordings show different motions, a factor of two is "
-              "harmless. Larger deviations can be adjusted through "
-              "--root-amp (mehr Rumpfbewegung) oder --smooth-hz (weniger Glaettung) "
-              "korrigieren.")
+        print("\nnote: motion strength differs at " + ", ".join(bad) + ". A factor of "
+              "two is harmless when the recordings show different motions. Larger "
+              "deviations can be adjusted with --root-amp or --smooth-hz.")
 
 
 if __name__ == "__main__":

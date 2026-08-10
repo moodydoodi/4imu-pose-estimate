@@ -1,11 +1,4 @@
-"""Reading a recording, resampling onto a common time grid, building windows.
-
-Deliberately tolerant of what the recording folders actually contain: sensor
-files start before the video (negative timestamps) and end after it, sampling
-rates differ per file, and the suffix is _aligned, _mp_spatial or _segment
-depending on the processing stage. Only the interval covered by all five
-sources is used.
-"""
+"""Read a recording, resample onto a common time grid, build windows."""
 from pathlib import Path
 
 import numpy as np
