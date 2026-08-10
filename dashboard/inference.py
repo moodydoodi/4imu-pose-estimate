@@ -14,6 +14,7 @@ and is out of scope here; those paths are incomplete.
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -667,7 +668,14 @@ def build_external_model(model_src, spec):
     """-> (model, parents or None). Branches on the variant found in the weights."""
     import torch
     mod = import_model_module(model_src)
-    Cls = getattr(mod, "TemporalPoseNetwork")
+    card = spec.card or card_for(spec.path)
+    wanted = card.get("model_class")
+    names = ([wanted] if wanted else []) + list(MODEL_CLASS_NAMES)
+    Cls = next((getattr(mod, n) for n in names if hasattr(mod, n)), None)
+    if Cls is None:
+        raise AttributeError(
+            f"{Path(model_src).name} defines none of {names}. Name the class in "
+            f"model_card.json as \"model_class\".")
     in_dim = spec.input_dim or 83
     hid, lay = spec.hidden_dim, spec.num_layers
     variant = spec.variant or ("mp34" if (spec.n_joints or 34) >= 34 else "fk13")
@@ -764,12 +772,16 @@ def run_stgcn_inference(model, X: np.ndarray, dt: np.ndarray, window: int,
 # ---------------------------------------------------------------------------
 # Reusable inference entry point (shared by the CLI and the dashboard)
 # ---------------------------------------------------------------------------
+# Only environment directories. "scripts", "lib" and "env" used to be here and
+# silently hid every checkpoint stored next to a training script.
 _SKIP_DIRS = {"site-packages", "dist-packages", "node_modules", ".git", "__pycache__",
-              "venv", ".venv", "env", ".env", "lib", "libs", "scripts"}
+              "venv", ".venv", ".env"}
 _SKIP_PTH = {"distutils-precedence.pth", "easy-install.pth", "protobuf-.pth"}
 # *.pt files that are data, not models (a dataset cache is not a checkpoint)
-_SKIP_NAME_TOKENS = ("cache", "dataset", "scaler", "stats", "optimizer", "optim_state",
-                     "features", "buffer")
+# Matched against the file STEM as a whole word, not as a substring: a
+# checkpoint called best_features.pt is a checkpoint, train_cache.pt is not.
+_SKIP_NAME_WORDS = {"cache", "dataset", "scaler", "stats", "optimizer",
+                    "optim", "optim_state", "buffer", "features"}
 
 def _is_intact_archive(p: Path) -> bool:
     """False for a truncated zip checkpoint. Legacy non-zip saves pass through."""
@@ -788,7 +800,9 @@ def _looks_like_checkpoint(p: Path) -> bool:
     if any(part in _SKIP_DIRS for part in p.parts):
         return False
     n = p.name.lower()
-    if any(tok in n for tok in _SKIP_NAME_TOKENS):
+    words = set(re.split(r"[^a-z0-9]+", p.stem.lower()))
+    if words & _SKIP_NAME_WORDS:
+        print(f"[spec] skipping {p.name}: looks like data, not a model")
         return False
     if not _is_intact_archive(p):
         print(f"[spec] skipping {p.name}: not a readable checkpoint (truncated or not a model file)")
@@ -820,6 +834,16 @@ def list_checkpoints(root):
     return out
 
 
+# Class names a model definition may use. A model_card.json next to the
+# checkpoint overrides this, which is the reliable way to add a new model.
+MODEL_CLASS_NAMES = ("TemporalPoseNetwork", "STGCN", "STGCNPoseNet", "PoseNetwork")
+
+
+def card_for(checkpoint):
+    """-> model_card.json next to a checkpoint, or {}."""
+    return _poser_card(checkpoint)
+
+
 def find_model_sources(root):
     """-> [(path, arch)] for .py files defining a model class."""
     root = Path(root)
@@ -829,11 +853,13 @@ def find_model_sources(root):
     for p in sorted(root.rglob("*.py")):
         if p.name.startswith(("dashboard", "inference", "make_synthetic", "validate_")):
             continue
+        if any(part in _SKIP_DIRS for part in p.parts):
+            continue
         try:
             txt = p.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        if "class TemporalPoseNetwork" not in txt:
+        if not any(f"class {c}" in txt for c in MODEL_CLASS_NAMES):
             continue
         arch = "stgcn" if any(k in txt for k in ("STGCNBlock", "build_spatial_adjacency",
                                                  "ForwardKinematics")) else "gru"
@@ -850,6 +876,21 @@ def resolve_model_src(checkpoint, sources):
     """-> the model-class .py matching a checkpoint: architecture, then version."""
     import re
     spec = checkpoint if isinstance(checkpoint, ModelSpec) else ModelSpec(checkpoint)
+
+    # A model_card.json next to the checkpoint wins over any guessing. Give the
+    # path to the file defining the model class, relative to the card or absolute:
+    #   {"kind": "stgcn", "model_src": "../../src/stgcn/model.py",
+    #    "model_class": "TemporalPoseNetwork"}
+    card = spec.card or card_for(spec.path)
+    declared = card.get("model_src") or card.get("module")
+    if declared:
+        cand = Path(declared)
+        if not cand.is_absolute():
+            cand = (Path(spec.path).parent / cand).resolve()
+        if cand.exists():
+            return str(cand)
+        print(f"[spec] model_card.json points at {declared}, which does not exist - guessing instead")
+
     cands = [p for p, a in sources if a == spec.arch]
     if not cands:
         cands = [p for p, _ in sources]

@@ -206,7 +206,9 @@ Repeat steps 3–4 with `--seed 1` and `--seed 2` for the 18 pairs behind the in
 Each run writes `best_<video>.pt` per fold, `model_card.json` (suffix, frame, fps,
 seed, source cache), `pred_<video>.npz` (predicted and true pose per frame) and
 `metrics.json`. The last two are enough to redo the evaluation without retraining.
-`best.pt` is a convenience copy of the **last** fold, not a best-over-folds model.
+`best.pt` is written only for a single run, not for `--loro`: with leave-one-out
+every fold has its own weights and a single file would just be whichever fold
+happened to run last. Use `best_<video>.pt`.
 
 <details>
 <summary><b>Generating the synthetic data</b></summary>

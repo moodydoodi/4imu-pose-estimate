@@ -1,4 +1,7 @@
 import pandas as pd
+import argparse
+import sys
+
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -24,6 +27,18 @@ def resample_signal(t, y):
     f = interp1d(t_rel, y, kind='cubic', bounds_error=False, fill_value=0)
     y_uniform = f(t_uniform)
     return t_uniform, y_uniform, t[0]
+
+PROJECT = Path(__file__).resolve().parents[2]     # repository root
+
+
+def _dir(p, default):
+    """Resolve a path against the repository root, not the working directory."""
+    q = Path(p) if p else Path(default)
+    return q if q.is_absolute() else (PROJECT / q)
+
+
+MIN_SYNC_CONFIDENCE = 0.30     # below this the offset is not trustworthy
+
 
 def extract_video_envelope(df_gt, loc):
     t_vid = df_gt['time'].values
@@ -113,7 +128,7 @@ def process_and_plot_subject(subj_folder, raw_root):
     gt_files = list(subj_folder.glob(f"{subj_id}*_gt_3d.csv"))
     if not gt_files:
         print(f"  [!] Missing GT.")
-        return
+        return {}
 
     gt_path = gt_files[0]
     df_gt = pd.read_csv(gt_path)
@@ -200,12 +215,44 @@ def process_and_plot_subject(subj_folder, raw_root):
     plt.tight_layout()
     plt.savefig(subj_folder / "sync_verification_plot.png", dpi=150)
     plt.close()
+    return sync_metrics
+
+def main():
+    ap = argparse.ArgumentParser(description="Synchronise sensors to the video")
+    ap.add_argument("--raw", default="data/raw")
+    ap.add_argument("--processed", default="data/processed")
+    ap.add_argument("--only", nargs="*", default=None,
+                    help="recording folder names; default is all of them")
+    ap.add_argument("--min-confidence", type=float, default=MIN_SYNC_CONFIDENCE,
+                    help="reject a sensor below this cross-correlation confidence")
+    a = ap.parse_args()
+
+    raw_root, processed_root = _dir(a.raw, "data/raw"), _dir(a.processed, "data/processed")
+    if not (processed_root.exists() and raw_root.exists()):
+        raise SystemExit(f"need both {raw_root} and {processed_root}")
+    subs = [d for d in sorted(processed_root.iterdir()) if d.is_dir()
+            and (a.only is None or d.name in a.only)]
+    if not subs:
+        raise SystemExit(f"no recordings under {processed_root}")
+
+    weak = []
+    for subj in subs:
+        m = process_and_plot_subject(subj, raw_root)
+        for loc, v in (m or {}).items():
+            if v["correlation_confidence"] < a.min_confidence:
+                weak.append((subj.name, loc, v["correlation_confidence"]))
+
+    print(f"\n{len(subs)} recording(s) synchronised.")
+    if weak:
+        print(f"\nWEAK SYNCHRONISATION, below {a.min_confidence}:")
+        for name, loc, c in weak:
+            print(f"  {name:14s} {loc:13s} confidence {c:.2f}")
+        print("A weak fit means the offset is a guess. Check the plot in the "
+              "recording folder before using it, and verify afterwards with\n"
+              "  python src/poser/checklag.py --cache <cache>")
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    raw_root = Path("./data/raw")
-    processed_root = Path("./data/processed")
-    
-    if processed_root.exists() and raw_root.exists():
-        for subj in processed_root.iterdir():
-            if subj.is_dir():
-                process_and_plot_subject(subj, raw_root)
+    sys.exit(main())

@@ -135,12 +135,24 @@ def process_wrapper(args):
     video_path, proc_dir = args
     process_subject_video(video_path, proc_dir)
 
+PROJECT = Path(__file__).resolve().parents[2]     # repository root
+
+
+def _dir(p, default):
+    """Resolve a path against the repository root, not the working directory."""
+    q = Path(p) if p else Path(default)
+    return q if q.is_absolute() else (PROJECT / q)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", default="./data/raw")
+    parser.add_argument("--root", default="data/raw")
+    parser.add_argument("--out", default="data/processed")
     args = parser.parse_args()
-    
-    raw_root = Path(args.root)
+
+    raw_root = _dir(args.root, 'data/raw')
+    out_root = _dir(args.out, 'data/processed')
+    print(f"raw: {raw_root}\nout: {out_root}")
     if not raw_root.exists():
         return
 
@@ -151,7 +163,7 @@ def main():
             if not vids:
                 continue
             
-            proc_dir = Path("./data/processed") / subj.name
+            proc_dir = out_root / subj.name
             proc_dir.mkdir(parents=True, exist_ok=True)
             
             # Predict the output filename based on the logic in process_subject_video

@@ -6,7 +6,7 @@ only for the inference step.
 
     python serve.py
 """
-import http.server, socketserver, json, os, sys, urllib.parse, importlib.util, webbrowser, threading, mimetypes, argparse, shutil, subprocess, uuid, time, traceback
+import http.server, socketserver, json, os, sys, urllib.parse, importlib.util, webbrowser, threading, mimetypes, argparse, shutil, subprocess, tempfile, uuid, time, traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -117,6 +117,17 @@ def ffprobe_duration(path):
     except Exception:
         return 0.0
 
+CONVERT_LOCKS = {}
+CONVERT_LOCKS_GUARD = threading.Lock()
+
+
+def _convert_lock(path):
+    """One lock per output file, so two jobs cannot convert the same video at once."""
+    key = str(Path(path).resolve())
+    with CONVERT_LOCKS_GUARD:
+        return CONVERT_LOCKS.setdefault(key, threading.Lock())
+
+
 def run_convert_job(jid, src):
     """Background H.264 conversion with progress from ffmpeg -progress."""
     j = JOBS[jid]
@@ -125,36 +136,55 @@ def run_convert_job(jid, src):
         if not src.exists():
             j.update(status="error", error="video not found"); return
         out = src.with_name(src.stem + "__h264.mp4")
-        if usable_h264(out):                       # a good conversion already exists
-            j.update(status="done", url=file_url(out)); return
         if not shutil.which("ffmpeg"):
             j.update(status="error", error="ffmpeg not installed / not on PATH"); return
-        dur = ffprobe_duration(src)
-        j.update(status="running", total=round(dur, 2), done=0, stage="converting to H.264")
-        print(f"[convert] start {src.name} ({dur:.0f}s) -> {out.name}")
-        # temp file plus rename, so an interrupted run leaves no half-written file
-        tmp = out.with_name(out.stem + ".part.mp4")
-        proc = subprocess.Popen(["ffmpeg", "-y", "-i", str(src), "-c:v", "libx264", "-preset", "veryfast",
-                                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart",
-                                 "-progress", "pipe:1", "-nostats", str(tmp)],
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        for line in proc.stdout:
-            line = line.strip()
-            if line.startswith("out_time_ms="):
-                try: j["done"] = round(int(line.split("=")[1]) / 1e6, 2)
-                except Exception: pass
-            elif line == "progress=end":
-                j["done"] = j.get("total", 0)
-        ret = proc.wait()
-        if ret != 0:
-            err = (proc.stderr.read() or "")[-300:]
-            print("[convert] ffmpeg error:", err)
-            try: tmp.unlink()
-            except OSError: pass
-            j.update(status="error", error="ffmpeg failed: " + err); return
-        os.replace(str(tmp), str(out))             # atomic
-        print(f"[convert] done -> {out}")
-        j.update(status="done", url=file_url(out))
+
+        with _convert_lock(out):
+            if usable_h264(out):                   # a good conversion already exists
+                j.update(status="done", url=file_url(out)); return
+            dur = ffprobe_duration(src)
+            j.update(status="running", total=round(dur, 2), done=0,
+                     stage="converting to H.264")
+            print(f"[convert] start {src.name} ({dur:.0f}s) -> {out.name}")
+            # Unique temp name per job, renamed at the end: two conversions of the
+            # same video can never write the same partial file.
+            tmp = out.with_name(f"{out.stem}.part-{jid}.mp4")
+            cmd = ["ffmpeg", "-y", "-i", str(src),
+                   # libx264 with yuv420p needs even dimensions; phone crops and
+                   # some exports are odd and would fail with
+                   # "width not divisible by 2".
+                   "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                   "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                   "-c:a", "aac", "-movflags", "+faststart",
+                   "-progress", "pipe:1", "-nostats", str(tmp)]
+            # stderr goes to a FILE, never to a pipe. ffmpeg can emit far more
+            # than the 64 kB pipe buffer (one warning per frame is common with
+            # variable frame rate footage); with stderr on a pipe that nobody
+            # drains, ffmpeg blocks on write, stops producing progress, and this
+            # loop waits for ever.
+            with tempfile.TemporaryFile(mode="w+", errors="ignore") as errf:
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errf, text=True)
+                for line in proc.stdout:
+                    line = line.strip()
+                    if line.startswith("out_time_ms="):
+                        try: j["done"] = round(int(line.split("=")[1]) / 1e6, 2)
+                        except Exception: pass
+                    elif line == "progress=end":
+                        j["done"] = j.get("total", 0)
+                ret = proc.wait()
+                errf.seek(0)
+                err_tail = errf.read()[-800:]
+            if ret != 0 or not tmp.exists() or tmp.stat().st_size < 1024:
+                print("[convert] ffmpeg failed:\n" + err_tail)
+                try: tmp.unlink()
+                except OSError: pass
+                j.update(status="error",
+                         error="ffmpeg failed: " + err_tail.strip().splitlines()[-1]
+                               if err_tail.strip() else "ffmpeg failed")
+                return
+            os.replace(str(tmp), str(out))         # atomic
+            print(f"[convert] done -> {out}")
+            j.update(status="done", url=file_url(out))
     except Exception as e:
         print("[convert] ERROR:\n" + traceback.format_exc())
         j.update(status="error", error=str(e))

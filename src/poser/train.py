@@ -48,7 +48,9 @@ class Cache:
         if not n or n >= len(self.recs):
             return self
         idx = rng.choice(len(self.recs), n, replace=False)
-        return Cache(recs=[self.recs[i] for i in sorted(idx)])
+        c = Cache(recs=[self.recs[i] for i in sorted(idx)])
+        c.meta = dict(self.meta)          # else model_card.json reports the wrong frame
+        return c
 
     def scramble(self):
         """Pair each recording's features with another one's poses (control)."""
@@ -69,7 +71,9 @@ class Cache:
 
     def subset(self, names):
         """Subset without re-reading the files."""
-        return Cache(recs=[r for r in self.recs if r["name"] in names], names=None)
+        c = Cache(recs=[r for r in self.recs if r["name"] in names], names=None)
+        c.meta = dict(self.meta)
+        return c
 
     @property
     def names(self):
@@ -215,7 +219,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default="cache/real")
     ap.add_argument("--skeleton", default="config/skeleton.json")
-    ap.add_argument("--suffix", default="_segment", help="only used to pick the augmentation")
+    ap.add_argument("--suffix", default=None,
+                    help="which augmentation to use; taken from the cache when omitted")
     ap.add_argument("--test", default=None)
     ap.add_argument("--val", default=None)
     ap.add_argument("--loro", action="store_true", help="use every recording once as the test case")
@@ -276,6 +281,19 @@ def main():
     if args.scramble_targets:
         cache = cache.scramble()
         print("NOTE: target poses scrambled - control condition, not real training")
+    # The augmentation depends on the reference frame of the features, which the
+    # cache knows. A forgotten --suffix used to silently train with the wrong one.
+    cached_suffix = cache.meta.get("suffix")
+    if args.suffix is None:
+        args.suffix = cached_suffix or "_segment"
+        if cached_suffix:
+            print(f"suffix {args.suffix} (from the cache)")
+    elif cached_suffix and args.suffix != cached_suffix:
+        raise SystemExit(
+            f"--suffix {args.suffix} but the cache was built from {cached_suffix} "
+            f"files.\nThe augmentation would not match the data. Drop --suffix to "
+            f"use the cached value.")
+
     names = cache.names
     n_par = sum(p.numel() for p in
                 Poser(canon, hidden=args.hidden, layers=args.layers).parameters())
@@ -302,7 +320,10 @@ def main():
         print(f"--- test {test}, validation {val}")
         model, m, P, Ytrue = run_one(cache, test, val, args, canon, device, evalcache)
         torch.save(model.state_dict(), Path(args.out) / f"best_{test}.pt")
-        torch.save(model.state_dict(), Path(args.out) / "best.pt")   # last fold
+        # Under --loro every fold has its own weights; a single "best.pt" would
+        # just be whichever fold ran last. Only write it for a single run.
+        if not args.loro:
+            torch.save(model.state_dict(), Path(args.out) / "best.pt")
         # Model card: suffix, reference frame and rate the weights belong to.
         (Path(args.out) / "model_card.json").write_text(json.dumps({
             "kind": "poser",

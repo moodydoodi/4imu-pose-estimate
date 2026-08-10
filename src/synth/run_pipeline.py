@@ -184,8 +184,17 @@ def main():
             if any(r is None for r in profile_recs):
                 raise SystemExit("At least one --profile-recordings entry was not found.")
         else:
-            profile_recs = [r for r in recs if r.name.lower() in {f"video{i}" for i in range(1, 7)}]
-            profile_recs = profile_recs or [rec]
+            # Anything under data/ that is not the bundled sample. The sample is
+            # 90 s of one recording and would make a useless noise profile, but it
+            # is called video1 and used to be picked up by a name match.
+            sample_dir = (C.PROJECT / "data" / "sample").resolve()
+            profile_recs = [r for r in recs if sample_dir not in r.resolve().parents]
+            if not profile_recs:
+                raise SystemExit(
+                    "No real recording for the noise profile - only the bundled "
+                    "sample was found.\nPut the recordings under data/processed, or "
+                    "name them with --profile-recordings.")
+            print(f"noise profile from {len(profile_recs)} recording(s)")
 
     t0 = time.time()
     if 1 in steps:

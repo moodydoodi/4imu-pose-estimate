@@ -1,8 +1,19 @@
 import pandas as pd
+import argparse
+
 import numpy as np
 from pathlib import Path
 import concurrent.futures
 import os
+
+PROJECT = Path(__file__).resolve().parents[2]     # repository root
+
+
+def _dir(p, default):
+    """Resolve a path against the repository root, not the working directory."""
+    q = Path(p) if p else Path(default)
+    return q if q.is_absolute() else (PROJECT / q)
+
 
 # MediaPipe Target Bases
 # Rows correspond to target X, Y, Z. Columns correspond to local X, Y, Z.
@@ -197,15 +208,21 @@ def process_subject(subject_dir: Path):
 
 
 if __name__ == "__main__":
-    processed_root = Path("./data/processed")
-    if not processed_root.exists():
-        print("[DEBUG] [MAIN] data/processed not found. Aborting.")
-        exit(1)
+    ap = argparse.ArgumentParser(description="_aligned -> _mp_spatial for every recording")
+    ap.add_argument("--processed", default="data/processed")
+    ap.add_argument("--only", nargs="*", default=None, help="recording folder names")
+    ap.add_argument("--workers", type=int, default=10)
+    a = ap.parse_args()
 
-    subject_dirs = [d for d in processed_root.iterdir() if d.is_dir()]
+    processed_root = _dir(a.processed, "data/processed")
+    if not processed_root.exists():
+        raise SystemExit(f"{processed_root} not found.")
+
+    subject_dirs = [d for d in sorted(processed_root.iterdir()) if d.is_dir()
+                    and (a.only is None or d.name in a.only)]
     print(f"[DEBUG] [MAIN] Found {len(subject_dirs)} subjects. Dispatching workers.")
 
-    MAX_CORES = 10
+    MAX_CORES = a.workers
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_CORES) as executor:
         futures = {executor.submit(process_subject, subj): subj for subj in subject_dirs}
