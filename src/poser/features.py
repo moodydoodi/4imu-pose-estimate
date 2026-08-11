@@ -21,10 +21,18 @@ def _to_grid(t_src, x, t_dst, fs_src, fs_dst, antialias=True):
     return np.stack([np.interp(t_dst, t_src, x[:, k]) for k in range(x.shape[1])], axis=1)
 
 
-def gravity_direction(acc, gyr, fs, k=0.05, sigma=2.5):
-    """Unit gravity direction in the sensor frame. acc in m/s2, gyr in rad/s."""
+def gravity_direction(acc, gyr, fs, tau=0.4, sigma=2.5, k=None):
+    """Unit gravity direction in the sensor frame. acc in m/s2, gyr in rad/s.
+
+    tau is the time constant of the accelerometer correction in seconds, so the
+    filter behaves the same at any sample rate. Run this at the sensor rate: the
+    gyroscope step is integrated to first order, and at 50 Hz a wrist turns up
+    to 30 degrees per step, where that approximation no longer holds.
+    """
     T = len(acc)
     dt = 1.0 / fs
+    if k is None:
+        k = min(1.0, dt / max(tau, 1e-6))
     g = np.empty((T, 3))
     n0 = np.linalg.norm(acc[0])
     g[0] = acc[0] / n0 if n0 > 1e-6 else np.array([0.0, 1.0, 0.0])
@@ -48,8 +56,14 @@ def high_band_energy(acc_mag, fs_src, t_src, t_dst):
     b, a = signal.butter(4, [lo / (fs_src / 2), hi / (fs_src / 2)], btype="band")
     y = signal.filtfilt(b, a, acc_mag - acc_mag.mean())
     step = float(np.median(np.diff(t_dst)))
-    w = max(3, int(round(fs_src * step)))
+    # At least one period of the lowest band frequency, otherwise the window is
+    # shorter than the wave it is supposed to measure and the result follows the
+    # phase rather than the amplitude.
+    w = max(3, int(round(fs_src / lo)), int(round(fs_src * step)))
     rms = np.sqrt(np.convolve(y ** 2, np.ones(w) / w, mode="same"))
+    # The envelope is not band limited either; without this it aliases when it
+    # is sampled onto the coarser target grid.
+    rms = _lowpass(rms[:, None], fs_src, 0.45 / step)[:, 0]
     return np.interp(t_dst, t_src, rms)
 
 
@@ -63,7 +77,12 @@ def sensor_features(t_src, acc, gyr_deg, t_dst, fs_src, fs_dst):
     acc_d = _to_grid(t_src, acc, t_dst, fs_src, fs_dst)
     gyr_d = _to_grid(t_src, gyr, t_dst, fs_src, fs_dst)
 
-    grav = gravity_direction(acc_d, gyr_d, fs_dst)
+    # Gravity is tracked at the sensor rate and only then brought onto the target
+    # grid. The direction varies slowly, so decimating it is harmless; running
+    # the filter on the decimated signal is not.
+    grav_src = gravity_direction(acc, gyr, fs_src)
+    grav = _to_grid(t_src, grav_src, t_dst, fs_src, fs_dst)
+    grav /= np.maximum(np.linalg.norm(grav, axis=1, keepdims=True), 1e-9)
     lin = acc_d - G * grav
 
     F = np.concatenate([

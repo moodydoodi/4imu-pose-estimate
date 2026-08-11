@@ -300,9 +300,14 @@ def main():
     print(f"{len(names)} recordings: {', '.join(names)}")
     print(f"seed {args.seed}"
           + ("  (cuDNN deterministic)" if args.deterministic else ""))
-    print(f"device {device}, {len(cache.index(hop=args.hop))} windows, "
+    n_win = len(cache.index(hop=args.hop))
+    # Windows overlap by 1 - hop/win, so counting them overstates how much
+    # independent data there is. The honest figure uses non-overlapping windows.
+    n_indep = len(cache.index(hop=WIN))
+    print(f"device {device}, {n_win} windows ({n_indep} non-overlapping), "
           f"{n_par/1e6:.2f} M parameters")
-    print(f"parameters per window {n_par/max(len(cache.index(hop=args.hop)),1):.0f}:1"
+    print(f"parameters per window {n_par/max(n_win,1):.0f}:1, "
+          f"per independent window {n_par/max(n_indep,1):.0f}:1"
           f"   (far above 100:1 means the model can memorise)\n")
 
     Path(args.out).mkdir(parents=True, exist_ok=True)
