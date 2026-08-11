@@ -276,7 +276,7 @@ def main():
                 print("  Skelett angepasst:")
                 print(retarget.report(before, retarget.measure(P), bone_targets))
                 print()
-            print(f"  {name[:40]:42s} {P.shape[0]:5d} Frames @ {fps_out:.0f} Hz "
+            print(f"  {name[:40]:42s} {P.shape[0]:5d} Frames @ {fps_actual:.0f} Hz "
                   f"| Achse {'XYZ'[up]} | Weg {travel:5.1f} m")
             ok += 1
         except Exception as e:
