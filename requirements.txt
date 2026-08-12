@@ -1,14 +1,23 @@
-# Core: preprocessing, feature extraction, evaluation.
-numpy>=1.24,<3
-pandas>=2.0
-scipy>=1.10
+# Runtime dependencies for the complete pipeline.
+# Tested with Python 3.11.  A CUDA-enabled PyTorch build should be installed
+# separately when training on an NVIDIA GPU (see https://pytorch.org/get-started/locally/).
 
-# Training and inference only. Preprocessing, synthesis and the evaluation
-# scripts run without it.
-torch>=2.0
+# Numeric data processing and signal filters
+numpy>=2.2,<3
+pandas>=2.3,<4
+scipy>=1.14,<2
 
-# Optional.
-matplotlib>=3.7      # comparison plots in src/synth/validate_synthetic.py
-reportlab>=4.0       # PDF report in src/poser/compare_metrics_to_pdf.py
+# Video-derived reference poses.  The extractor uses mp.solutions.pose, so this
+# version is pinned deliberately.
+mediapipe==0.10.14
+opencv-python>=4.8,<6
+tqdm>=4.66,<5
+
+# Model training and dashboard inference
+torch>=2.0,<3
+
+# Synchronisation, validation and documentation reports
+matplotlib>=3.7,<4
+reportlab>=4,<6
 
 # Developed and tested with Python 3.11, numpy 2.2, pandas 2.3, torch 2.x.
