@@ -1,112 +1,109 @@
-# 3D Pose Estimation from Four Wrist- and Ankle-Worn IMUs
+# 3D pose from four wrist- and ankle-worn IMUs
 
-Estimating 13-joint human pose from four Axivity AX6 inertial sensors (both wrists,
-both ankles), with synthetic training data generated from AMASS motion capture.
+Estimating a 13-joint body pose from four Axivity AX6 sensors worn on both wrists
+and both ankles, using video-derived poses as the training target and synthetic
+AMASS motion as additional pre-training data.
 
-<p align="left">
-  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
-  <img alt="PyTorch" src="https://img.shields.io/badge/pytorch-%E2%89%A52.0-ee4c2c">
-  <img alt="Sensors" src="https://img.shields.io/badge/sensors-4%20%C3%97%20AX6-informational">
-  <img alt="Joints" src="https://img.shields.io/badge/joints-13-informational">
-  <img alt="Status" src="https://img.shields.io/badge/status-course%20project-lightgrey">
+Motion capture normally needs a camera, which means it stops at the edge of the
+frame. Four sensors on the limbs do not, so the question is how much of a body pose
+survives when the only thing you can measure is what the wrists and ankles are doing.
+
+Technical Project, Hochschule Düsseldorf. Code and evaluation in this repository:
+Dalia Salih. See [Acknowledgements](#acknowledgements) for the parts of the project
+that were joint work.
+
+**[Constraints](#the-two-constraints-that-shape-everything)** ·
+**[Results](#results)** ·
+**[Getting started](#getting-started)** ·
+**[How it works](#how-it-works)** ·
+**[Layout](#repository-layout)** ·
+**[Limitations](#limitations)** ·
+**[Data and licences](#data-sources-and-licences)**
+
+<p align="center">
+  <img src="docs/img/dashboardpredicttab.png" width="330"
+       alt="Predicted skeleton overlaid on the ground-truth skeleton in the dashboard">
 </p>
 
-Module **Technical Project**, · Hochschule Düsseldorf 
-Authors: Dalia Salih · Anton Rabanus
-
----
-
-## At a glance
+<p align="center"><sub>Prediction (orange) against the video-derived ground truth
+(blue), with the error drawn per joint.</sub></p>
 
 | | |
 |---|---|
-| **Input** | 4 × Axivity AX6 (accelerometer + gyroscope, **no magnetometer**), wrists and ankles |
-| **Output** | 13-joint, pelvis-centred pose at 50 fps, in a body-fixed frame |
-| **Ground truth** | MediaPipe 3D landmarks from a synchronised video |
-| **Data** | 6 real recordings (≈ 1 h) + 800 synthetic recordings (4.13 h) from AMASS |
-| **Model** | TCN stem → BiLSTM → two-stage bone-direction head, 4.44 M parameters |
-| **Best MPJPE** | **89.5 mm** (leave-one-recording-out, 3 seeds) vs. 105.4 mm trivial baseline |
-
-Two findings carry the project. Choosing a **body-fixed target frame** — instead of
-the world frame comparable systems use — was by far the largest improvement
-(relative gain over the trivial baseline 6.1 % → 13.4 %). **Synthetic pre-training**
-adds a smaller but statistically clean −2.86 mm; against expectation, *more*
-synthetic data made that effect *smaller*.
-
-**Contents** · [About](#about) · [Results](#results) · [Getting started](#getting-started) ·
-[Reproducing the results](#reproducing-the-results) · [Layout](#layout) ·
-[Method](#method-in-brief) · [Dashboard](#dashboard) · [Limitations](#limitations) ·
-[Known gaps](#known-gaps-in-this-release) · [Data sources](#data-sources-and-licences)
+| Input | 4 × Axivity AX6, accelerometer and gyroscope at 200 Hz, no magnetometer |
+| Output | 13 joints, pelvis-centred, 50 fps, in a body-fixed frame |
+| Target | MediaPipe 3D landmarks from a synchronised video |
+| Data | 6 real recordings (≈ 1 h) plus 4.1 h of synthetic recordings from AMASS |
+| Model | TCN stem → BiLSTM → two-stage bone-direction head, 4,439,568 parameters |
+| Result | 91.7 mm MPJPE, leave-one-recording-out, against a 105.3 mm trivial baseline |
 
 ---
 
-## About
+## The two constraints that shape everything
 
-Reconstructing full-body pose from four cheap limb-mounted sensors. Two properties
-of this setup shape every design decision, and both differ from the published
-systems this work is compared against.
+**Heading is not observable.** Comparable systems — DIP, TransPose, PIP, IMUPoser —
+generally assume that sensor orientation is already available as an input, and in
+practice those orientation estimates are usually magnetometer-supported. The AX6 has
+no magnetometer, so rotation about the vertical drifts with the gyroscope integral.
+Feeding an estimated orientation into the network would mean training on a quantity
+that walks away at inference time. So the input uses only observable quantities, and
+the target pose is defined without a heading at all.
 
-**Rotation about the vertical is not observable.** DIP, TransPose, PIP and IMUPoser
-are all fed ready-made orientation matrices, which come from a magnetometer-based
-sensor fusion. The AX6 has no magnetometer, so heading drifts with the gyroscope
-integral — feeding an *estimated* orientation to the network would mean training on
-a quantity that drifts away at inference time. The pipeline therefore uses only
-observable quantities as input and expresses targets in a body-fixed frame that
-contains no heading. Measured on video1, removing the heading drops the trivial
-baseline from 135.7 to 103.6 mm: about 32 mm of the total pose variance is heading
-alone, and no four-sensor system without a magnetometer can recover it.
+How much that matters shows up at the hips. They sit rigidly 102 mm from the pelvis
+and cannot have a real position error, yet in the world frame they carried about
+58 mm. At that lever arm this corresponds to a rotation of roughly 33°, which every
+joint further down the chain then inherits.
 
-**Six recordings are not enough** for 4.44 M parameters and ≈ 9 400 training
-windows. Synthetic AMASS-derived data is used to pre-train, the six real recordings
-to fine-tune. Mixing both in one pool would drown out six videos among hundreds.
+
+**Six recordings is not much** for 4.44 M parameters. One hour of data is 945
+four-second windows if they are not allowed to overlap, so about 4,700 parameters
+per independent window. Synthetic AMASS-derived recordings are used to
+pre-train and the six real recordings to fine-tune. Mixing both into one pool would
+drown six videos among hundreds.
 
 ---
 
 ## Results
 
-Leave-one-recording-out over six recordings, three seeds, errors in **mm**.
+Leave-one-recording-out over the six recordings, seed 0, MPJPE in mm. The paired
+conclusion about pre-training below rests on all 18 comparisons, 3 seeds × 6 folds.
 
-| Condition | MPJPE ↓ | PA-MPJPE ↓ | PCK@100 ↑ | raw output |
-|---|---:|---:|---:|---|
-| Trivial mean-pose baseline | 105.4 | – | – | `docs/RESULTS.md` §1 |
-| Real data only | 92.3 | 71.2 | 66.8 % | baseline of all rows below |
-| **+ pre-training, 120 rec., 1 epoch** | **89.5** | **69.1** | **67.7 %** | `results/pilot_e1_vs_real.*` |
-| + pre-training, 120 rec., 2 epochs | 89.6 | 69.7 | 67.6 % | `results/pilot_e2_vs_real.*` |
-| + pre-training, 800 rec., 1 epoch | 90.8 | 70.2 | 67.0 % | `results/final800_e1_h110_vs_real.*` |
+| | video1 | video2 | video3 | video4 | video5 | video6 | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| real data only | 89.4 | 103.3 | 83.9 | 92.8 | 93.1 | 87.6 | **91.7** |
+| with pre-training | 88.7 | 114.3 | 85.6 | 92.5 | 92.2 | 87.4 | **93.4** |
 
-> **Note.** The best number comes from the *pilot* pre-training set (120 CMU
-> recordings). The larger "final" 800-recording set performs **worse** and its
-> interval includes zero. Both are reported on purpose — see [Limitations](#limitations).
+The trivial mean-pose baseline of the same folds is 105.3 mm, so the model does learn
+something, though the margin is not large.
 
-**Is the effect real?** Single folds are useless here: variants differ by one to two
-millimetres, and two seeds of the *same* variant differ just as much. The effect is
-therefore measured as a paired comparison over 3 seeds × 6 test recordings = 18
-pairs, with bootstrap 95 % confidence intervals.
+**The body-fixed target frame was the largest single improvement in the project.**
+The relative gain over the trivial baseline rises from 6.1 % to 13.4 %, and PA-MPJPE,
+which removes global rotation on both sides and is therefore directly comparable,
+goes from 77.7 to 70.6 mm.
 
-| Pre-training set | ≈ steps | Δ MPJPE | 95 % CI | better in |
-|---|---:|---:|---|---:|
-| 120 recordings, 1 epoch | 118 | **−2.86** | [−4.35, −1.42] | 16 / 18 |
-| 120 recordings, 2 epochs | 237 | −2.77 | [−4.40, −1.14] | 14 / 18 |
-| 800 recordings, 1 epoch | 781 | −1.48 | [−3.35, **+0.43**] | 14 / 18 |
+**Synthetic pre-training has no effect I can measure.** Over 18 paired comparisons
+the difference is +0.95 mm at t ≈ 0.84 — but running the same method with nothing
+changed except the random seed produces differences of up to 4.31 mm. The noise of
+the procedure is three to four times the effect it was supposed to measure, so the
+conclusion is not "pre-training does not help" but "this setup cannot resolve an
+effect of that size".
 
-For the first condition PA-MPJPE gives −2.09 [−3.47, −0.89] and PCK@100 +0.89
-[+0.12, +1.74] — both intervals exclude zero.
+The error grows monotonically down the kinematic chain, from 0 mm at the pelvis to
+about 160 mm at the wrists and ankles. That the sensor-carrying joints are the worst
+looks wrong at first, but a sensor measures the orientation of its segment, not the
+position of its joint, so the position still has to come through the whole chain from
+the pelvis outward.
 
-**How good can these numbers get?** MediaPipe's own bone lengths fluctuate by
-**20.0 mm** frame to frame, so any rigid skeleton is roughly that far from the raw
-targets by construction; forcing every subject onto one shared skeleton costs a
-further 1.1 mm. Values below ≈ 20 mm would be fitting noise in the ground truth.
-
-Per-joint errors, all checks and the full tables are in
-[`docs/RESULTS.md`](docs/RESULTS.md); per-fold output in [`results/`](results/).
+Full tables, per-joint errors, the plots and every check I ran are in
+[`docs/RESULTS.md`](docs/RESULTS.md).
 
 ---
 
 ## Getting started
 
-Python 3.10+ (developed on 3.11). `numpy`, `pandas`, `scipy` for preprocessing,
-features and evaluation; `torch ≥ 2.0` for training and inference only;
-`matplotlib` optionally for the synthesis plots.
+Python 3.10 or newer. `numpy`, `pandas` and `scipy` for preprocessing, features and
+evaluation, `torch ≥ 2.0` for training and inference, `mediapipe` and `opencv` only
+for extracting poses from video.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
@@ -118,265 +115,145 @@ export PYTHONPATH=src/poser        # Windows cmd: set PYTHONPATH=src\poser
 The `poser` modules import each other flatly (`import skeleton`), so the package
 directory has to be on the path.
 
-**1 · Check the mechanics, no data needed (≈ 10 s)**
+> A GPU is strongly recommended. Everything up to the feature cache runs fine on a
+> CPU in a few minutes. Training does not.
 
-```bash
-python src/poser/train.py --dry-run
-```
-
-Verifies the torch forward kinematics against the numpy reference, that bone lengths
-in the output are exact, that augmentation leaves the gravity axis untouched, and
-that gradients flow.
-
-**2 · Run the bundled sample** — a 90 s excerpt of one recording ships with the
-repository so the pipeline can be executed end to end without the (unpublished)
-dataset.
-
-```bash
-# sensor-to-segment rotation (rewrites data/sample/video1/*_segment.csv)
-python src/preprocess/to_segment.py data/sample/video1 --suffix _aligned
-
-# features + cache, reusing the shipped sample skeleton
-python src/poser/prepare.py --data data/sample --suffix _segment --frame body \
-    --cache cache/sample --skeleton-in config/skeleton_sample.json
-
-# data checks
-python src/poser/selftest.py --cache cache/sample --skeleton config/skeleton_sample.json
-```
-
-<details>
-<summary><b>What the output should look like</b></summary>
-
-`to_segment.py` prints `video1  4/4 sensors   uncertain: left_wrist, right_wrist,
-right_ankle`. "Uncertain" only means the Kabsch residual exceeds a conservative
-threshold on a 90 s excerpt; the full recordings are longer and fit more tightly.
-The rotation is applied either way.
-
-In `selftest.py` the `exact` column must be ≈ 0.00 (the bone-direction
-parameterisation reproduces the pose), `|g|` must be 1.000, and `ankle/wrist`
-(impact-energy ratio) must be well above 1 — otherwise the sensor assignment is wrong.
-
-</details>
-
-> ⚠ Use `--skeleton-in` to *reuse* a skeleton file. `--skeleton` **writes** a new one
-> and will overwrite the version-controlled `config/*.json`.
-
----
-
-## Reproducing the results
-
-Needs the full dataset under `data/processed/` (not redistributable, see
-[Data sources](#data-sources-and-licences)).
-
-```bash
-# 1  features and canonical skeleton
-python src/poser/prepare.py --data data/processed --exclude video7 --suffix _segment \
-    --frame body --cache cache/real_body --skeleton config/skeleton.json
-python src/poser/prepare.py --data synthdata/output/recordings --suffix _segment \
-    --frame body --cache cache/synth_body --skeleton-in config/skeleton.json
-
-# 2  checks before spending GPU time
-python src/poser/selftest.py --cache cache/real_body --skeleton config/skeleton.json
-python src/poser/checklag.py --cache cache/real_body
-python src/poser/floor.py   --data data/processed --skeleton config/skeleton.json
-
-# 3  baseline: real data only, every recording once as the test case
-python src/poser/train.py --cache cache/real_body --skeleton config/skeleton.json \
-    --loro --epochs 20 --lr 5e-4 --patience 8 --seed 0 --out models/base_s0
-
-# 4  pre-train on synthetic, then fine-tune on real
-python src/poser/train.py --cache cache/synth_body --skeleton config/skeleton.json \
-    --epochs 1 --lr 5e-4 --seed 0 --out models/pre_s0
-python src/poser/train.py --cache cache/real_body --skeleton config/skeleton.json \
-    --loro --epochs 20 --lr 2e-4 --patience 8 --seed 0 \
-    --init models/pre_s0/best.pt --out models/ft_s0
-
-# 5  quick look at two runs
-python src/poser/compare.py models/base_s0 models/ft_s0
-
-# 6  the reported statistic: paired over all seeds, with bootstrap intervals
-python src/poser/compare_metrics_to_pdf.py \
-    --baseline   'models/base_s*/metrics.json' \
-    --experiment 'models/ft_s*/metrics.json' \
-    --out results/ft_vs_real.pdf
-```
-
-Repeat steps 3–4 with `--seed 1` and `--seed 2` for the 18 pairs behind the intervals.
-
-Each run writes `best_<video>.pt` per fold, `model_card.json` (suffix, frame, fps,
-seed, source cache), `pred_<video>.npz` (predicted and true pose per frame) and
-`metrics.json`. The last two are enough to redo the evaluation without retraining.
-`best.pt` is written only for a single run, not for `--loro`: with leave-one-out
-every fold has its own weights and a single file would just be whichever fold
-happened to run last. Use `best_<video>.pt`.
-
-<details>
-<summary><b>Generating the synthetic data</b></summary>
-
-Needs the AMASS sequences and an SMPL-H body model, neither redistributable.
-
-```bash
-python src/synth/check_setup.py      # reports what is missing and where it is expected
-python src/synth/run_pipeline.py --sample 600 --max-seconds 60 --foot-impacts
-```
-
-Four steps: measure the AX6 noise profile from the real recordings → convert AMASS
-to the pose format → generate virtual AX6 signals → compare against a real recording.
-
-</details>
-
----
-
-## Layout
-
-```
-src/poser/          model, features, training, evaluation
-    config.py  features.py  skeleton.py  dataio.py  augment.py  model.py
-    prepare.py      → cache/*.npz (features + targets, no torch needed)
-    train.py        training, LORO evaluation, metrics, --dry-run self-check
-    selftest.py  checklag.py  floor.py   data checks and reference values
-    infer.py  compare.py  npz_to_dashboard.py
-src/preprocess/     sensor-to-segment calibration (estimate_mount, to_segment)
-src/synth/          synthetic data from AMASS (check_setup, run_pipeline,
-                    sensor_noise_profile, amass_to_pose, retarget, mounting,
-                    synth_imu, validate_*)
-dashboard/          local web dashboard for inspecting predictions
-config/             canonical skeleton (full dataset + bundled sample)
-data/sample/        90 s excerpt of one recording so the pipeline can be run
-results/            evaluation output of the reported experiments
-docs/RESULTS.md     detailed results, per-joint errors, all checks
-```
-
-`data/raw/`, `data/processed/`, `cache/`, `models/`, `logs/` and `synthdata/` are not
-version-controlled, apart from the bundled sample.
-
----
-
-## Method in brief
-
-**Input — 12 channels per sensor, 48 in total**
-
-| # | Channel | Why |
-|---:|---|---|
-| 3 | Gravity direction in the sensor frame | Drift free — the accelerometer keeps correcting the complementary filter. Two of three orientation DOF. |
-| 3 | Linear acceleration (acc − gravity) | Observable without a magnetometer. |
-| 3 | Angular rate | Observable without a magnetometer. |
-| 2 | \|acc\|, \|gyr\| | Magnitudes, invariant under mounting rotation. |
-| 1 | Energy in the 20–90 Hz band | Everything is resampled to 50 Hz to match the pose, which would otherwise discard the landing impact. At the ankles ≈ 6× larger than at the wrists. |
-
-Gravity is tracked with a complementary filter (Mahony without the magnetometer
-branch); the accelerometer only corrects while `|acc|` ≈ 1 g, so the gyroscope
-carries alone through the flight phase of a jump.
-
-**Sensor frame.** Signals are rotated from the *device* frame (depends on how the
-band happened to sit) into the *segment* frame (depends only on the body). DIP and
-TransPose use a T-pose for this; none was recorded here, but a video exists for every
-recording, so the rotation is estimated over the whole recording with a Kabsch fit of
-the measured gravity direction against an anatomical frame derived from the pose —
-the functional sensor-to-segment calibration used in biomechanics.
-*Verified:* changing the simulated band orientation alters `_aligned` by 128 units
-and `_mp_spatial` by 118, but `_segment` by **0.34**.
-
-**Output.** Twelve bone directions as unit vectors — not joint positions, not 6D
-rotations. With fixed bone lengths that is an exact parameterisation of a
-pelvis-centred 13-joint pose (24 DOF); positions follow from a prefix sum along the
-chain, so bone lengths are correct by construction and cannot drift.
-*Verified:* true directions with true lengths reproduce the pose to 0.00 mm.
-
-**Network.** `48 feat → LayerNorm → TCN stem (dilations 1/2/4 ≈ 0.4 s ≈ one landing)
-→ BiLSTM (2×256) → stage 1: the 4 sensor-carrying bones (own loss term) → BiLSTM
-→ stage 2: all 12 bones → forward kinematics → 13 joints`. Two-stage output is
-leaf-to-full as in TransPose. A BiLSTM rather than a transformer or ST-GCN: with ≈ 1 h
-of real data, capacity is not the bottleneck (`docs/RESULTS.md` §5). Loss = Huber on
-positions + 0.5·direction cosine + 1.0·Huber on velocity + 0.5·Huber on stage 1.
-
-**Synthetic data.** AMASS sequences are converted to the pose format, the skeleton is
-scaled to the real subjects, virtual AX6 signals are derived per sensor site, and the
-signals are then degraded with a noise profile *measured from the real recordings*:
-axis scale error (0.968–1.072), gyro offset, Gauss-Markov bias drift, coloured noise
-with measured AR(1), quantisation and range clipping. One profile per real recording
-is drawn at random per generated recording, as is the mounting.
-*Validated on the 48 input features:* the median distance between synthetic and real
-(0.22 σ) equals the median distance between two real recordings (0.22 σ), and in 69 %
-of features the synthetic data is closer to a real recording than two real recordings
-are to each other. The one serious defect is the wrist impact band — see below.
-
----
-
-## Dashboard
+**Look at the results in the dashboard.** This is the quickest way to see what the
+model actually does. It needs a trained run and the matching cache, both of which
+come out of the pipeline.
 
 ```bash
 python src/poser/npz_to_dashboard.py --models models/ft_s0 \
     --cache cache/real_body --data data/processed
-cd dashboard && python serve.py        # localhost only, opens http://127.0.0.1:8000
+cd dashboard && python serve.py        # localhost only, http://127.0.0.1:8000
 ```
 
-Choose the project root, pick a recording, compare models under *Evaluation*.
-Predictions of body-frame models are rotated back into the world frame using the
-**ground-truth heading** so the skeleton lines up with the video. No error figure
-changes — both sides are rotated by the same matrix — but it is flagged as
+Pick the project root and choose a recording. There are three tabs.
+
+**Signals** shows acceleration and angular rate of all four sensors on one shared
+time axis. This is where the landing impacts the whole feature design is built around
+become visible, and where a dead sensor or a swapped mounting shows up immediately.
+
+![The Signals tab, acceleration of all four sensors on a shared time axis](docs/img/dashboardsignalstab.png)
+
+**Prediction & Video** puts the reference video next to a 3D view of the skeleton,
+which can be shown as prediction only, ground truth only, or both overlaid with the
+per-joint error drawn as links — that is the view at the top of this page.
+Predictions from body-frame models are rotated back into the world frame using the
+ground-truth heading so the skeleton lines up with the video. No error figure changes,
+since both sides are rotated by the same matrix, but it is flagged as
 `heading_from_gt`, because heading is not something the model predicts.
+
+**Evaluation** is where the numbers are: several trained models ranked on the same
+recording, a radar profile across all metrics, and MPJPE, jitter, bone-length error
+and joint angle side by side.
+
+![The Evaluation tab, model comparison table and radar profile](docs/img/dashboardevaltab.png)
+
+**Running the pipeline yourself** — including on your own recordings, which needs a
+side-view video of the whole body and four AX6 exports with a few jumps at the start
+— is described step by step in [`docs/PIPELINE.md`](docs/PIPELINE.md). Two commands
+in there run without any data at all and are worth trying first.
 
 ---
 
-## Evaluation protocol
+## How it works
 
-One recording for testing, a second for validation (early stopping), the rest for
-training; the test recording is never touched. `--loro` repeats this with every
-recording as the test case and averages — a single number on a single test recording
-is far too noisy to judge a change by. Every configuration runs with seeds 0, 1, 2:
-the six-fold mean is stable across seeds (92.05 / 92.26 / 92.68) while single folds
-vary widely (video4: 93.15 / 102.39 / 93.52). Metrics are MPJPE, PA-MPJPE (per-frame
-Procrustes, removes global rotation and scale), PCK@50, PCK@100, plus the trivial
-mean-pose baseline of the same fold. video1/video5 and video4/video6 are the same
-subjects respectively; excluding video5 entirely changes video1 by 1.5 mm, so the
-LORO numbers are sound (`docs/RESULTS.md` §5).
+![The video produces the target for the real recordings, the sensors produce the 48 input features, and AMASS produces both a synthetic input and its own synthetic target for pre-training](docs/img/pipeline.svg)
+
+**Sensor frame.** An IMU measures its own housing (not the body), so how the band
+happened to sit that day is present in every channel. Systems of this kind commonly
+handle it with a recorded calibration pose; none was recorded here, but there is a
+video for every recording, so the mounting rotation is estimated over the whole
+recording instead, with a Kabsch fit of the measured gravity direction against an
+anatomical frame derived from the pose. Changing only the band orientation moves the raw signal by 128
+units and the segment-frame signal by 0.34.
+
+**Input, twelve channels per sensor, 48 in total.** Gravity direction (3) from a
+complementary filter without the magnetometer branch, linear acceleration (3),
+angular rate (3, never integrated), the two magnitudes, and the energy in the
+20–90 Hz impact band. That last channel is computed at the full 200 Hz and only its
+envelope is brought down to 50 Hz, because the landing impact sits above what 50 Hz
+can represent and would otherwise be lost. It comes out about six times larger at the
+ankles than at the wrists, which is the sanity check that it measures what it should.
+
+**Output.** Twelve bone directions as unit vectors, not joint positions and not 6D
+rotations. With fixed bone lengths that is an exact parameterisation of a
+pelvis-centred pose — 24 degrees of freedom, exactly as many as the pose has — and
+bone lengths are then correct by construction. Free coordinates would let the network
+stretch bones; 6D rotations would add twist about the bone axis, which is not present
+in joint positions and could therefore never be supervised.
+
+**Network.** `48 features → LayerNorm → TCN stem → BiLSTM (2 × 256) → stage 1: the
+four sensor-carrying bones → BiLSTM (1 × 256) → stage 2: all twelve bones → forward
+kinematics → 13 joints`. The stem has a receptive field of about 0.58 s, the
+timescale of a landing rather than a stride. Stage 1 predicts only the bones that
+actually carry a sensor and hands them to stage 2 as an anchor, so the unobserved
+bones are placed relative to reliable ones instead of from nothing. The two-stage
+leaf-to-full structure follows TransPose.
+
+**Synthetic data.** AMASS sequences are converted to the same 13-joint format,
+virtual sensors are placed at a fixed offset on the segment, and the derived signals
+are degraded with a noise profile measured from the real recordings rather than
+assumed. The check is not whether it looks real but whether it sits closer to a real
+recording than two real recordings sit to each other: median distance 0.22 σ on both
+sides, and closer in 69 % of the 48 features.
+
+The reasoning behind each of these decisions is written up properly in the project
+report in [`docs/`](docs/); the numbers behind them are in
+[`docs/RESULTS.md`](docs/RESULTS.md).
+
+---
+
+## Repository layout
+
+```
+src/preprocess/   video → pose, synchronisation, segment calibration
+src/poser/        features, model, training, evaluation
+src/synth/        synthetic IMU data from AMASS
+dashboard/        local web dashboard for inspecting predictions
+config/           canonical skeleton, for the full dataset and the sample
+data/sample/      90 s excerpt of one recording, so the pipeline can be run
+docs/             results, pipeline instructions, project report
+```
+
+What each script does is described where it is used, in
+[`docs/PIPELINE.md`](docs/PIPELINE.md). `data/raw/`, `data/processed/`, `cache/`,
+`models/`, `logs/` and `synthdata/` are not version-controlled, apart from the
+bundled sample.
 
 ---
 
 ## Limitations
 
-**Deliberate scope.** Global position and heading are not predicted. Without a trunk
-sensor and without a magnetometer neither is observable, and a model that outputs
-them outputs guesses. Evaluation is pelvis-centred, and PA-MPJPE is reported next to
-MPJPE so the share of the error that is pure rotation stays visible.
-
-**Control conditions implemented but not run.** `train.py --scramble-targets` pairs
-each recording's sensor data with another recording's poses — input and target
-distributions unchanged, only the relation destroyed. If pre-training still helped,
-the gain would be a better weight initialisation rather than transferred knowledge.
-Together with `--max-recordings` this separates the *amount* of pre-training from its
-*content*. These runs have not been carried out, so both explanations remain confounded.
-
-| | |
-|---|---|
-| **Ground truth is MediaPipe, not a marker system.** | Bone lengths fluctuate (≈ 20 mm) and the side facing away from the camera is measured systematically shorter — left thigh 412 mm vs. right 342 mm in the canonical skeleton. Training and evaluation use the same targets, so comparisons are not distorted, but it bounds how good the targets can be. |
-| **More synthetic data made the effect smaller.** | The benefit decays monotonically with pre-training steps. Either it is only a better initialisation that longer pre-training destroys, or the 800-recording set is worse in content (120 = CMU only; 800 adds ACCAD, DanceDB, HDM05, TotalCapture — crawling, dance, martial arts, all further from jumping). |
-| **Synthesis artefact in the impact band — found and fixed, data not yet regenerated.** | The 800-recording set carries a spurious tone at 80 Hz = \|200 Hz sensor rate − 120 Hz pose rate\|: a resampling image, amplified by ω² in the double differentiation, sitting inside the 20–90 Hz impact band. It stands 78–87× above the local noise floor at the wrists (real recordings: ~1×). The 25 Hz smoothing default was itself calibrated against that corrupted signal. Both are fixed in `src/synth/synth_imu.py` (rotations now get the same low pass as the positions, default smoothing 14 Hz, and a guard rejects any recording whose image tone exceeds 3×), which brings the synthetic impact band to 1.3–1.6× real at the wrists and 0.6–0.8× at the ankles. **The published `results/` were produced on the old, contaminated set and will change once the data is regenerated.** See [`docs/RESULTS.md`](docs/RESULTS.md) §3. |
-| **Ankles are the worst joints** (153 / 166 mm). | The arm error was dominated by trunk uncertainty and largely disappears in the body frame; the leg error is actual movement. |
-| **Six recordings, four subjects.** | Every conclusion rests on a very small sample. The paired design and bootstrap intervals exist because of that, but do not substitute for more data. |
-| **Offline only.** | The BiLSTM is bidirectional and the impact-band feature needs a sliding window, so the system is not real-time capable as built. |
-
----
-
-## Known gaps in this release
-
-Listed openly so reviewers do not have to find them:
-
-- The aggregation script that produced the bootstrap intervals in `results/*.json` is
-  **not in this repository**. `src/poser/compare.py` does a paired sign test and a
-  *t*-statistic, not the bootstrap. The per-fold inputs (`results/*.csv`) are included,
-  so the intervals can be recomputed.
-- `run_pipeline.py --selection` and `synth_imu.py --mount` expect manifests produced by
-  `build_amass_manifest.py` and `mount_calib.py`, which are not included. Without
-  `--selection` the pipeline runs on all available AMASS sequences.
-- `src/synth/common.py` resolves its input and output directories relative to
-  `src/synth/`, not to the repository root; the commands above assume the root.
-- Parts of `dashboard/inference.py` are a generic loader for a second, differently
-  architected model developed in parallel; those code paths are incomplete.
-- `config/skeleton.json` still carries German joint names while
-  `config/skeleton_sample.json` and `src/poser/config.py` use English ones. Only
-  `parents` and the bone lengths are read, so this is cosmetic.
+- **No global position, no heading.** Absolute position is not observable from
+four limb IMUs. Heading is not reliably observable without an external heading
+reference such as a magnetometer. A trunk sensor would constrain torso motion,
+but would not establish an absolute heading by itself.
+- **Offline only.** The BiLSTM is bidirectional and the impact-band feature needs a
+  sliding window. Switching to unidirectional LSTMs is not a structural change, but
+  it would cost accuracy.
+- **Six recordings, four subjects.** The 18 paired comparisons come from six
+  recordings and are not independent of each other, so everything here is a
+  directional statement and not a significance claim.
+- **The ground truth is MediaPipe, not a marker system.** Bone lengths fluctuate by
+  about 20 mm frame to frame, and the side facing away from the camera is measured
+  systematically shorter — 412 mm left thigh against 342 mm right in the canonical
+  skeleton. Training and evaluation use the same targets, so comparisons between
+  variants are not distorted, but anything below roughly 20 mm would be fitting noise
+  in the ground truth.
+- **The synthetic motion is missing the activity that matters.** The ankle-to-wrist
+  impact ratio is 2.75 synthetic against 6.05 real, because AMASS has little jumping
+  in it and the selection weights for diversity across datasets, so martial arts,
+  gestures and crawling end up in the set. That is the most likely reason the
+  pre-training shows nothing: the synthetic data misses exactly the part of the
+  signal that carries the legs. `src/synth/filter_manifest.py` filters the selection
+  towards leg-dominant motion.
+- **The synthesis had an artefact in the impact band.** AMASS runs at 120 Hz and the
+  sensor grid at 200 Hz, and the resampling left an image of the source rate at
+  80 Hz — inside the 20–90 Hz band, amplified by ω² in the double differentiation.
+  Diagnosis and fix are in `src/synth/synth_imu.py`; `docs/RESULTS.md` §3 has the
+  measurements.
 
 ---
 
@@ -384,18 +261,22 @@ Listed openly so reviewers do not have to find them:
 
 | Source | Use | Availability |
 |---|---|---|
-| **AMASS** (Mahmood et al., ICCV 2019) | Motion sequences for synthetic pre-training | Not included. Own licence, MPI for Intelligent Systems — https://amass.is.tue.mpg.de |
-| **SMPL-H** ("Extended SMPL+H", not SMPL-X) | Joint regression from AMASS parameters | Not included. Same source and licence. |
-| **Own recordings** (6 sessions, 4 subjects, AX6 + video) | Fine-tuning and all evaluation | Not published — they contain identifiable video. A 90 s excerpt is in `data/sample/`. |
-| **MediaPipe Pose** (Google) | 3D landmark ground truth from video | Apache 2.0 |
+| AMASS (Mahmood et al., ICCV 2019) | Motion sequences for synthetic pre-training | Not included. Own licence, MPI for Intelligent Systems, https://amass.is.tue.mpg.de |
+| SMPL-H ("Extended SMPL+H", not SMPL-X) | Joint regression from AMASS parameters | Not included, same source and licence |
+| Own recordings (6 sessions, 4 subjects, AX6 and video) | Fine-tuning and all evaluation | Not published, they contain identifiable video. A 90 s excerpt is in `data/sample/` |
+| MediaPipe Pose (Google) | 3D landmark ground truth from video | Apache 2.0 |
 
-`src/synth/check_setup.py` reports which external assets are missing and where they
-are expected.
+References: Mahmood et al., *AMASS*, ICCV 2019 · Huang et al., *Deep Inertial Poser*,
+SIGGRAPH Asia 2018 · Yi et al., *TransPose*, SIGGRAPH 2021 · Yi et al., *Physical
+Inertial Poser*, CVPR 2022 · Mollyn et al., *IMUPoser*, CHI 2023 · Mahony et al.,
+*Nonlinear complementary filters on the special orthogonal group*, 2008
 
-**References.** Mahmood et al., *AMASS*, ICCV 2019 · Huang et al., *Deep Inertial
-Poser*, SIGGRAPH Asia 2018 · Yi et al., *TransPose*, SIGGRAPH 2021 (leaf-to-full
-staging) · Yi et al., *Physical Inertial Poser*, CVPR 2022 · Mollyn et al.,
-*IMUPoser*, CHI 2023 · Mahony et al., *Nonlinear complementary filters on the special
-orthogonal group*, 2008
+---
 
-<sub>Technical Project, Hochschule Düsseldorf. Coursework, provided as-is.</sub>
+## Acknowledgements
+
+The project began as joint work with github member **a-rabanus**. The recording sessions, the video-IMU synchronisation and the definition of the 13-joint skeleton were done together, and the sensor data and ground truth in this repository come out of that
+shared groundwork. A second modelling approach was developed in parallel on the same
+data; it is not part of this repository or of the evaluation reported here.
+
+Course: Technical Project, Hochschule Düsseldorf. 
