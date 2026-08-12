@@ -196,8 +196,6 @@ def run_infer_job(jid, body):
     try:
         ck = body["checkpoint"]; spec = INF.ModelSpec(ck)
         stride = int(body.get("stride", 1) or 1)
-        sources = INF.find_model_sources(body["root"]) if body.get("root") else []
-        msrc = INF.resolve_model_src(ck, sources) if spec.arch == "stgcn" else None
         try:
             dev = INF.device_info() if hasattr(INF, "device_info") else "cpu"
         except Exception:
@@ -208,8 +206,8 @@ def run_infer_job(jid, body):
         def prog(done, total):
             j["done"] = done; j["total"] = total; j["stage"] = f"running on {dev}"
 
-        name, _, mets = INF.infer_to_files(body["dir"], ck, model_src=msrc,
-                                            model_name=spec.name, progress=prog, stride=stride)
+        name, _, mets = INF.infer_to_files(body["dir"], ck, model_name=spec.name,
+                                           progress=prog, stride=stride)
         pred = str(Path(body["dir"]) / f"predictions__{name}.csv")
         dur = time.time() - j["t0"]
         print(f"[infer] done '{name}' in {dur:.1f}s -> {pred}")
@@ -247,7 +245,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 for p, s in INF.list_checkpoints(root):
                     cks.append({"path": str(p), "name": s.name, "arch": s.arch,
                                 "window": s.window, "hidden": s.hidden_dim, "layers": s.num_layers})
-                srcs = [{"path": str(p), "arch": a} for p, a in INF.find_model_sources(root)]
             return self._json({"subjects": scan_subjects(root), "checkpoints": cks, "sources": srcs,
                                "torch": _has_torch(), "ffmpeg": shutil.which("ffmpeg") is not None})
         if u.path == "/api/data":
